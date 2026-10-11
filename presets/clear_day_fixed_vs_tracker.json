@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "name": "clear_day_fixed_vs_tracker",
+  "date": "2026-03-21",
+  "seed": 1,
+  "mppt_period": 1.0,
+  "env_dt": 1.0,
+  "margin_s": 300.0,
+  "start_h": null,
+  "end_h": null,
+  "latitude": 14.07,
+  "longitude": 100.6,
+  "tz_hours": 7.0,
+  "weather": {
+    "sky": "clear",
+    "seed": 1,
+    "t_min": 25.5,
+    "t_max": 34.0,
+    "t_peak_hour": 14.5,
+    "linke": 4.5
+  },
+  "shading": "none",
+  "panels": [
+    {
+      "panel_id": "fixed",
+      "mount": "fixed",
+      "mount_params": {},
+      "algorithm": "po",
+      "mppt_params": {},
+      "datasheet": {},
+      "buck": {},
+      "sensor": {},
+      "load": {
+        "mode": "CR",
+        "setpoint": 3.0
+      },
+      "load_profile": null
+    },
+    {
+      "panel_id": "tracker",
+      "mount": "tracker",
+      "mount_params": {},
+      "algorithm": "po",
+      "mppt_params": {},
+      "datasheet": {},
+      "buck": {},
+      "sensor": {},
+      "load": {
+        "mode": "CR",
+        "setpoint": 3.0
+      },
+      "load_profile": null
+    }
+  ]
+}

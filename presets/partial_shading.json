@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "name": "partial_shading",
+  "date": "2026-03-21",
+  "seed": 1,
+  "mppt_period": 1.0,
+  "env_dt": 1.0,
+  "margin_s": 300.0,
+  "start_h": 11.0,
+  "end_h": 13.0,
+  "latitude": 14.07,
+  "longitude": 100.6,
+  "tz_hours": 7.0,
+  "weather": {
+    "sky": "clear",
+    "seed": 1,
+    "t_min": 25.5,
+    "t_max": 34.0,
+    "t_peak_hour": 14.5,
+    "linke": 4.5
+  },
+  "shading": [
+    {
+      "start_h": 11.5,
+      "end_h": 12.5,
+      "depth": [
+        0.0,
+        0.0,
+        0.7
+      ],
+      "ramp_s": 600.0,
+      "label": "partial_shading"
+    }
+  ],
+  "panels": [
+    {
+      "panel_id": "po",
+      "mount": "fixed",
+      "mount_params": {},
+      "algorithm": "po",
+      "mppt_params": {},
+      "datasheet": {},
+      "buck": {},
+      "sensor": {},
+      "load": {
+        "mode": "CR",
+        "setpoint": 3.0
+      },
+      "load_profile": null
+    },
+    {
+      "panel_id": "global_scan",
+      "mount": "fixed",
+      "mount_params": {},
+      "algorithm": "global_scan",
+      "mppt_params": {
+        "scan_period": 600
+      },
+      "datasheet": {},
+      "buck": {},
+      "sensor": {},
+      "load": {
+        "mode": "CR",
+        "setpoint": 3.0
+      },
+      "load_profile": null
+    }
+  ]
+}

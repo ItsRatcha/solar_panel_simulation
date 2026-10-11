@@ -4,6 +4,10 @@ Every MPPT step advances the clock by `channel.dt`.  The environment (sun,
 clouds, temperature, shadows) and the mount orientation are refreshed every
 `env_dt` seconds of simulated time, which keeps the cost of rebuilding I-V
 curves bounded.  Energies are integrated as the day goes.
+
+The run covers sunrise - margin to sunset + margin unless a window
+(t_start, t_end in seconds after midnight) is given.  An optional load
+profile (times in seconds after midnight) re-programs the e-load every step.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from dataclasses import dataclass
 
 from ..environment.day import DayEnvironment, EnvSample
 from ..environment.irradiance import POA
+from ..load.profiles import LoadProfile
 from .live import LiveChannel, Snapshot
 
 
@@ -49,11 +54,15 @@ class DaySnapshot:
 
 class DayRunner:
     def __init__(self, channel: LiveChannel, env: DayEnvironment, mount, env_dt: float = 1.0,
-                 margin_s: float = 300.0):
+                 margin_s: float = 300.0, t_start: float | None = None, t_end: float | None = None,
+                 load_profile: LoadProfile | None = None):
         self.ch, self.env, self.mount = channel, env, mount
         self.env_dt = env_dt
-        self.t_start = env.sunrise_s - margin_s
-        self.t_end = env.sunset_s + margin_s
+        self.t_start = env.sunrise_s - margin_s if t_start is None else t_start
+        self.t_end = env.sunset_s + margin_s if t_end is None else t_end
+        if self.t_end <= self.t_start:
+            raise ValueError("day window is empty (t_end <= t_start)")
+        self.load_profile = load_profile
         self.reset()
 
     def reset(self) -> None:
@@ -87,6 +96,8 @@ class DayRunner:
 
     def step(self) -> DaySnapshot:
         self._refresh_env()
+        if self.load_profile is not None:
+            self.ch.load = self.load_profile.at(self.clock)
         snap = self.ch.step()
         dt_h = self.ch.dt / 3600.0
         e = self.energy

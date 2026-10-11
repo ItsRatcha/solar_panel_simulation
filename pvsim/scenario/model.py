@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ..converter.buck_averaged import BuckAveraged, BuckParams
+from ..data.faults import FaultEvent, FaultSchedule, parse_faults
 from ..engine.live import LiveChannel
 from ..environment.day import SHADE_PRESETS, DayEnvironment, ShadeEvent
 from ..environment.solar_position import Site
@@ -63,6 +64,7 @@ class Scenario:
     date: str = "2026-03-21"  # YYYY-MM-DD, local
     weather: WeatherConfig = field(default_factory=lambda: WeatherConfig(sky="clear"))
     shading: str | list = "none"  # SHADE_PRESETS name or list of ShadeEvent dicts
+    faults: list = field(default_factory=list)  # FaultEvent dicts (data.faults)
     panels: list[PanelSpec] = field(default_factory=lambda: [PanelSpec()])
     mppt_period: float = 1.0  # [s]
     env_dt: float = 1.0  # [s] environment refresh
@@ -81,6 +83,9 @@ class Scenario:
         ids = [p.panel_id for p in self.panels]
         if not ids or len(set(ids)) != len(ids):
             raise ValueError(f"panel_ids must be non-empty and unique, got {ids}")
+        for e in self.fault_events():
+            if e.panel_id is not None and e.panel_id not in ids:
+                raise ValueError(f"fault {e.kind} targets unknown panel {e.panel_id!r}")
 
     # ------------------------------------------------------------- builders
     @property
@@ -93,6 +98,14 @@ class Scenario:
                 raise ValueError(f"unknown shading preset {self.shading!r}; choose from {list(SHADE_PRESETS)}")
             return list(SHADE_PRESETS[self.shading])
         return [ShadeEvent(**{**e, "depth": tuple(e["depth"])}) for e in self.shading]
+
+    def fault_events(self) -> list[FaultEvent]:
+        return parse_faults(self.faults)
+
+    def fault_schedule(self, k: int) -> FaultSchedule | None:
+        pid = self.panels[k].panel_id
+        events = [e for e in self.fault_events() if e.applies_to(pid)]
+        return FaultSchedule(events) if events else None
 
     def site(self) -> Site:
         return Site(self.latitude, self.longitude, self.tz_hours)
@@ -131,6 +144,7 @@ class Scenario:
             "margin_s": self.margin_s, "start_h": self.start_h, "end_h": self.end_h,
             "latitude": self.latitude, "longitude": self.longitude, "tz_hours": self.tz_hours,
             "weather": self.weather.to_dict(), "shading": shading,
+            "faults": [e.to_dict() for e in self.fault_events()],
             "panels": [p.to_dict() for p in self.panels],
         }
 
@@ -147,6 +161,8 @@ class Scenario:
             d["weather"] = WeatherConfig(**d["weather"])
         if "panels" in d:
             d["panels"] = [PanelSpec.from_dict(p) for p in d["panels"]]
+        if "faults" in d:
+            d["faults"] = [dict(e) for e in d["faults"]]
         if isinstance(d.get("shading"), list):
             d["shading"] = [dict(e) for e in d["shading"]]
         return cls(**d)

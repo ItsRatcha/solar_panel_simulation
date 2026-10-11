@@ -39,7 +39,8 @@ def run_scenario(sc: Scenario, extended: bool = False,
     for k in range(len(sc.panels)):
         ch, mount, out_sensor, profile = sc.build_channel(k)
         runners.append(DayRunner(ch, env, mount, env_dt=sc.env_dt, margin_s=sc.margin_s,
-                                 t_start=t_start, t_end=t_end, load_profile=profile))
+                                 t_start=t_start, t_end=t_end, load_profile=profile,
+                                 faults=sc.fault_schedule(k)))
         out_sensors.append(out_sensor)
     rec = Recorder(env.midnight, sc.tz_hours, extended=extended)
     ids = [p.panel_id for p in sc.panels]
@@ -47,7 +48,8 @@ def run_scenario(sc: Scenario, extended: bool = False,
     n = 0
     while not lead.done:
         for pid, r, so in zip(ids, runners, out_sensors):
-            rec.record(pid, r.ch, r.step(), so)
+            ds = r.step()
+            rec.record(pid, r.ch, ds, so, label=r.fault_label)
         n += 1
         if progress is not None and n % 500 == 0:
             progress(lead.progress)

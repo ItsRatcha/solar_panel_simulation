@@ -16,7 +16,7 @@ from ..converter.buck_averaged import BuckAveraged
 from ..load.electronic_load import ElectronicLoad
 from ..mppt import MPPTAlgorithm, create_mppt
 from ..pv.datasheet import PanelDatasheet, cell_temperature_noct
-from ..pv.panel import IVCurve, Panel
+from ..pv.panel import IVCurve, Panel, _zero_curve
 from ..sensors.ina226 import INA226
 from .operating_point import Reachability, mpp_reachability, solve_operating_point
 
@@ -84,6 +84,8 @@ class LiveChannel:
         self._v_prev: float | None = None
         self._reach_key = None
         self._reach: Reachability | None = None
+        self.shorted: tuple[bool, ...] | None = None  # fault hook: shorted bypass diodes
+        self.open_circuit = False  # fault hook: panel disconnected
 
     def reset(self) -> None:
         self.t = 0.0
@@ -94,7 +96,9 @@ class LiveChannel:
         return cell_temperature_noct(self.cond.t_amb, self.cond.g, self.datasheet.noct)
 
     def curve(self) -> IVCurve:
-        return self.panel.curve(self.cond.g_substrings(), self.t_cell())
+        if self.open_circuit:
+            return _zero_curve()
+        return self.panel.curve(self.cond.g_substrings(), self.t_cell(), self.shorted)
 
     def _reachability(self, curve: IVCurve) -> Reachability:
         key = (id(curve), self.load, id(self.conv))

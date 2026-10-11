@@ -20,6 +20,7 @@
     "linke": 4.5
   },
   "shading": "none",
+  "faults": [],
   "panels": [
     {
       "panel_id": "po",

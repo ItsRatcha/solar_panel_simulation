@@ -1,6 +1,7 @@
 """Command line interface.
 
     pvsim run SCENARIO.json|PRESET --out run.csv [--extended] [--resample 1min] [--period 1] [--seed 3]
+    pvsim batch --days N --seed S --out DIR [--resample 1min] [--period 1] [--workers 4] [--extended]
     pvsim presets [--write presets/]
     pvsim schema [--extended]
 """
@@ -52,6 +53,16 @@ def cmd_run(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_batch(a: argparse.Namespace) -> int:
+    from .data.batch import run_batch
+
+    path = run_batch(a.days, a.seed, a.out, resample=a.resample, period=a.period,
+                     extended=a.extended, workers=a.workers,
+                     progress=None if a.quiet else _progress)
+    print(f"wrote {a.days} day(s) and {path}")
+    return 0
+
+
 def cmd_presets(a: argparse.Namespace) -> int:
     for name, make in PRESETS.items():
         doc = " ".join((make.__doc__ or "").strip().split("\n\n")[0].split())
@@ -82,6 +93,17 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--save-scenario", help="also write the effective scenario JSON here")
     r.add_argument("--quiet", "-q", action="store_true", help="no progress output")
     r.set_defaults(func=cmd_run)
+
+    b = sub.add_parser("batch", help="generate a labeled dataset of randomized days")
+    b.add_argument("--days", type=int, required=True)
+    b.add_argument("--seed", type=int, default=1)
+    b.add_argument("--out", "-o", default="datasets/batch", help="output directory")
+    b.add_argument("--resample", choices=RESAMPLE_CHOICES, default="1min")
+    b.add_argument("--period", type=float, default=1.0, help="MPPT period [s]")
+    b.add_argument("--workers", type=int, default=1, help="parallel processes")
+    b.add_argument("--extended", action="store_true", help="append ground-truth columns")
+    b.add_argument("--quiet", "-q", action="store_true")
+    b.set_defaults(func=cmd_batch)
 
     p = sub.add_parser("presets", help="list built-in scenarios")
     p.add_argument("--write", metavar="DIR", help="write each preset as JSON into DIR")

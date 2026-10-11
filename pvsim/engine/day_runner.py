@@ -7,7 +7,8 @@ curves bounded.  Energies are integrated as the day goes.
 
 The run covers sunrise - margin to sunset + margin unless a window
 (t_start, t_end in seconds after midnight) is given.  An optional load
-profile (times in seconds after midnight) re-programs the e-load every step.
+profile (times in seconds after midnight) re-programs the e-load every step,
+and an optional fault schedule perturbs the channel (see data.faults).
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ class DaySnapshot:
 class DayRunner:
     def __init__(self, channel: LiveChannel, env: DayEnvironment, mount, env_dt: float = 1.0,
                  margin_s: float = 300.0, t_start: float | None = None, t_end: float | None = None,
-                 load_profile: LoadProfile | None = None):
+                 load_profile: LoadProfile | None = None, faults=None):
         self.ch, self.env, self.mount = channel, env, mount
         self.env_dt = env_dt
         self.t_start = env.sunrise_s - margin_s if t_start is None else t_start
@@ -63,6 +64,8 @@ class DayRunner:
         if self.t_end <= self.t_start:
             raise ValueError("day window is empty (t_end <= t_start)")
         self.load_profile = load_profile
+        self.faults = faults  # data.faults.FaultSchedule or None
+        self.fault_label: str | None = None
         self.reset()
 
     def reset(self) -> None:
@@ -90,12 +93,14 @@ class DayRunner:
         s = self.env.sample(self.clock)
         tilt, az = self.mount.update(s.sun, dt)
         cond, poa = self.env.conditions(s, tilt, az)
-        self.ch.cond = cond
+        self.ch.cond = self._base_cond = cond
         self._env, self._poa = s, poa
         self._next_env = self.clock + self.env_dt
 
     def step(self) -> DaySnapshot:
         self._refresh_env()
+        if self.faults is not None:
+            self.fault_label = self.faults.apply(self.ch, self.mount, self._base_cond, self.clock)
         if self.load_profile is not None:
             self.ch.load = self.load_profile.at(self.clock)
         snap = self.ch.step()

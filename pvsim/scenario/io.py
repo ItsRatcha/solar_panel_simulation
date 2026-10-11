@@ -11,7 +11,7 @@ from .model import Scenario
 def save_scenario(sc: Scenario, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sc.to_dict(), indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(sc.to_dict(), indent=2) + "\n", encoding="utf-8", newline="\n")
     return path
 
 

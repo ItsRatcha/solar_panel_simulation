@@ -71,5 +71,6 @@ def to_csv_frame(df: pd.DataFrame) -> pd.DataFrame:
 def write_csv(df: pd.DataFrame, path: str | Path, rule: str = "raw", float_format: str = "%.6g") -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    to_csv_frame(resample(df, rule)).to_csv(path, index=False, float_format=float_format)
+    to_csv_frame(resample(df, rule)).to_csv(path, index=False, float_format=float_format,
+                                            lineterminator="\n")  # same bytes on every OS
     return path

@@ -1,26 +1,52 @@
-"""Main window: controls on the left, live curves and time plots on the right."""
+"""Main window: controls on the left, live curves and time plots on the right.
+
+Two modes:
+- Manual: you move the sun/temperature/shade sliders yourself.
+- Full day: a DayRunner drives the panel from sunrise to sunset (sun path,
+  clouds, temperature, scripted shadows, fixed mount or tracker) and the
+  window shows the clock and the energy collected so far.
+"""
 
 from __future__ import annotations
 
+import time
 from collections import deque
+from datetime import date
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-    QLabel, QMainWindow, QPushButton, QScrollArea, QSlider, QSplitter, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDateEdit, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox,
+    QHBoxLayout, QLabel, QMainWindow, QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter,
+    QVBoxLayout, QWidget,
 )
 
 from ..converter.buck_averaged import BuckAveraged, BuckParams
+from ..engine.day_runner import DayRunner, DaySnapshot
 from ..engine.live import Conditions, LiveChannel, Snapshot
+from ..environment.day import SHADE_PRESETS, DayEnvironment
+from ..environment.weather import WeatherConfig
 from ..load.electronic_load import ElectronicLoad
 from ..mppt import available_mppt, create_mppt
 from ..sensors.ina226 import INA226, INA226Config
+from ..tracking.mounts import make_mount
 
-HISTORY = 1500  # samples kept in the time plots
+HISTORY = 1500  # samples kept in the time plots (manual mode)
+HISTORY_DAY = 8000  # whole day at one sample per DAY_RECORD_S
+DAY_RECORD_S = 10.0  # day mode: plot one sample every 10 s of clock time
+FRAME_BUDGET_S = 0.030  # stop stepping when a frame has used this much wall time
+LIVE_DT = 0.1  # MPPT period in manual mode [s]
 TRAIL = 40  # recent operating points drawn on the curves
 SPEEDS = {"Slow (1 step/frame)": 1, "Normal (5)": 5, "Fast (25)": 25, "Very fast (100)": 100}
+# day mode: simulated seconds per real second ("Max" = as fast as the CPU allows)
+DAY_SPEEDS = {"1 min / s": 60, "10 min / s": 600, "1 h / s": 3600, "Max": 1e9}
+DAY_PERIODS = {"1 s (accurate)": 1.0, "5 s": 5.0, "10 s (fast)": 10.0}
+SKY_LABELS = {"clear": "Clear", "partly_cloudy": "Partly cloudy", "cloudy": "Cloudy",
+              "overcast": "Overcast", "random": "Random (from seed)"}
+SHADE_LABELS = {"none": "No shading", "tree_morning": "Tree, 07:00-09:00",
+                "pole_noon": "Pole, 11:30-12:30", "building_evening": "Building, 16:00-18:30"}
+VARIABLE_STEP = ("po_variable", "inccond_variable")
 ALGO_LABELS = {
     "po": "P&O (fixed step)",
     "po_variable": "P&O (variable step)",
@@ -30,12 +56,19 @@ ALGO_LABELS = {
     "manual": "Manual duty (no MPPT)",
 }
 LOAD_UNITS = {"CR": ("Ω", 3.0, 0.1, 1000.0), "CC": ("A", 2.0, 0.0, 10.0), "CV": ("V", 6.0, 0.0, 40.0)}
+HIST_KEYS = ("t", "p_mpp", "p_pv", "p_out", "duty", "v_pv", "v_mpp", "v_out", "g", "t_amb", "t_cell")
 
 C_CURVE = (90, 160, 255)
 C_MPP = (255, 200, 0)
 C_OP = (40, 220, 90)
 C_MEAS = (255, 90, 90)
 C_LOCAL = (255, 140, 0)
+
+
+def _hhmm(t_s: float, sec: bool = False) -> str:
+    t = int(t_s)
+    h, m, x = t // 3600, t % 3600 // 60, t % 60
+    return f"{h:02d}:{m:02d}:{x:02d}" if sec else f"{h:02d}:{m:02d}"
 
 
 class LabeledSlider(QWidget):
@@ -69,6 +102,13 @@ class LabeledSlider(QWidget):
     def setValue(self, v: float) -> None:
         self.slider.setValue(int(round(v / self.scale)))
 
+    def show_value(self, v: float) -> None:
+        """Display a value without emitting valueChanged (label shows the exact value)."""
+        self.slider.blockSignals(True)
+        self.setValue(v)
+        self.slider.blockSignals(False)
+        self.label.setText(self.fmt.format(v) + self.unit)
+
     def _update_label(self):
         self.label.setText(self.fmt.format(self.value()) + self.unit)
 
@@ -77,13 +117,19 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PV + Buck + MPPT simulator")
-        self.resize(1500, 950)
+        self.resize(1500, 1000)
 
         self.ch = LiveChannel()
         self.trail: deque = deque(maxlen=TRAIL)
-        self.hist = {k: deque(maxlen=HISTORY) for k in
-                     ("t", "p_mpp", "p_pv", "p_out", "duty", "v_pv", "v_mpp", "v_out")}
+        self.hist = self._make_hist(HISTORY)
         self.last: Snapshot | None = None
+        self.runner: DayRunner | None = None
+        self.day: DaySnapshot | None = None
+        self._next_rec = -1.0
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(33)  # ~30 frames per second
+        self.timer.timeout.connect(self._tick)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self._build_controls())
@@ -92,13 +138,17 @@ class MainWindow(QMainWindow):
         splitter.setSizes([420, 1080])
         self.setCentralWidget(splitter)
 
-        self.timer = QTimer(self)
-        self.timer.setInterval(33)  # ~30 frames per second
-        self.timer.timeout.connect(self._tick)
-
         self._apply_all()
         self._tick_once_and_draw()
         self.toggle_run()
+
+    @staticmethod
+    def _make_hist(maxlen: int) -> dict[str, deque]:
+        return {k: deque(maxlen=maxlen) for k in HIST_KEYS}
+
+    @property
+    def day_mode(self) -> bool:
+        return self.runner is not None
 
     # ------------------------------------------------------------------ controls
     def _build_controls(self) -> QWidget:
@@ -108,21 +158,62 @@ class MainWindow(QMainWindow):
         # --- run
         g = QGroupBox("Simulation")
         f = QGridLayout(g)
+        self.cmb_mode = QComboBox()
+        self.cmb_mode.addItems(["Manual (you move the sliders)", "Full day (sunrise → sunset)"])
+        self.cmb_mode.setToolTip("Full day: sun, clouds, temperature and shadows change by themselves.")
+        self.cmb_mode.currentIndexChanged.connect(self._mode_changed)
         self.btn_run = QPushButton("Start")
         self.btn_run.clicked.connect(self.toggle_run)
-        btn_reset = QPushButton("Reset MPPT + plots")
-        btn_reset.setToolTip("Restart the MPPT from its initial duty and clear the time plots.")
+        btn_reset = QPushButton("Reset")
+        btn_reset.setToolTip("Restart the MPPT and clear the plots (day mode: back to sunrise).")
         btn_reset.clicked.connect(self.reset)
         self.cmb_speed = QComboBox()
-        self.cmb_speed.addItems(SPEEDS)
-        self.cmb_speed.setCurrentIndex(1)
-        self.cmb_speed.setToolTip("MPPT steps simulated per screen frame (one step = 0.1 s).")
         self.lbl_time = QLabel("t = 0.0 s")
-        f.addWidget(self.btn_run, 0, 0)
-        f.addWidget(btn_reset, 0, 1)
-        f.addWidget(QLabel("Speed"), 1, 0)
-        f.addWidget(self.cmb_speed, 1, 1)
-        f.addWidget(self.lbl_time, 2, 0, 1, 2)
+        f.addWidget(QLabel("Mode"), 0, 0)
+        f.addWidget(self.cmb_mode, 0, 1)
+        f.addWidget(self.btn_run, 1, 0)
+        f.addWidget(btn_reset, 1, 1)
+        f.addWidget(QLabel("Speed"), 2, 0)
+        f.addWidget(self.cmb_speed, 2, 1)
+        f.addWidget(self.lbl_time, 3, 0, 1, 2)
+        self._fill_speeds(day=False)
+        v.addWidget(g)
+
+        # --- full day settings (only visible in day mode)
+        self.grp_day = g = QGroupBox("Full day")
+        f = QFormLayout(g)
+        self.de_date = QDateEdit(QDate(2026, 3, 21))
+        self.de_date.setCalendarPopup(True)
+        self.de_date.setDisplayFormat("yyyy-MM-dd")
+        self.cmb_sky = QComboBox()
+        for k, lbl in SKY_LABELS.items():
+            self.cmb_sky.addItem(lbl, k)
+        self.cmb_sky.setCurrentIndex(self.cmb_sky.findData("partly_cloudy"))
+        self.sp_seed = QSpinBox()
+        self.sp_seed.setRange(0, 999999)
+        self.sp_seed.setValue(1)
+        self.sp_seed.setToolTip("Same seed = same clouds and temperature, so runs can be compared.")
+        self.cmb_dayshade = QComboBox()
+        for k in SHADE_PRESETS:
+            self.cmb_dayshade.addItem(SHADE_LABELS.get(k, k), k)
+        self.cmb_mount = QComboBox()
+        self.cmb_mount.addItem("Fixed, 14° tilt facing south", "fixed")
+        self.cmb_mount.addItem("2-axis sun tracker", "tracker")
+        self.cmb_period = QComboBox()
+        self.cmb_period.addItems(DAY_PERIODS)
+        self.cmb_period.setToolTip("Time between MPPT steps. 1 s is close to the ESP32;\n"
+                                   "10 s simulates a day about 10x faster.")
+        btn_day = QPushButton("Start new day")
+        btn_day.setToolTip("Apply these settings and run from sunrise to sunset.")
+        btn_day.clicked.connect(self.start_day)
+        f.addRow("Date", self.de_date)
+        f.addRow("Sky", self.cmb_sky)
+        f.addRow("Weather seed", self.sp_seed)
+        f.addRow("Shading", self.cmb_dayshade)
+        f.addRow("Mount", self.cmb_mount)
+        f.addRow("MPPT period", self.cmb_period)
+        f.addRow(btn_day)
+        g.hide()
         v.addWidget(g)
 
         # --- environment
@@ -130,7 +221,8 @@ class MainWindow(QMainWindow):
         f = QFormLayout(g)
         self.sl_g = LabeledSlider(0, 1200, 1000, 10, unit=" W/m²",
                                   tooltip="Sunlight hitting the panel (1000 W/m² = full sun).")
-        self.sl_t = LabeledSlider(10, 45, 30, 1, unit=" °C", tooltip="Air temperature around the panel.")
+        self.sl_t = LabeledSlider(10, 45, 30, 1, fmt="{:.1f}", unit=" °C",
+                                  tooltip="Air temperature around the panel.")
         f.addRow("Irradiance", self.sl_g)
         f.addRow("Ambient temp", self.sl_t)
         self.sl_shade = []
@@ -171,15 +263,14 @@ class MainWindow(QMainWindow):
         self.sp_step.setRange(0.0005, 0.05)
         self.sp_step.setSingleStep(0.001)
         self.sp_step.setValue(0.005)
-        self.sp_step.setToolTip("How much the duty cycle changes per MPPT step.\n"
-                                "Bigger = faster but more wobble around the peak.")
+        self.lbl_step = QLabel("Step size")
         self.sl_duty = LabeledSlider(0, 0.95, 0.5, 0.005, fmt="{:.3f}",
                                      tooltip="Duty cycle used in Manual mode.")
         self.cmb_algo.currentIndexChanged.connect(self._apply_algo)
         self.sp_step.valueChanged.connect(self._apply_algo)
         self.sl_duty.valueChanged.connect(self._manual_duty)
         f.addRow("Algorithm", self.cmb_algo)
-        f.addRow("Step size", self.sp_step)
+        f.addRow(self.lbl_step, self.sp_step)
         f.addRow("Manual duty", self.sl_duty)
         v.addWidget(g)
 
@@ -208,6 +299,8 @@ class MainWindow(QMainWindow):
             ("Cloud: 1000 → 300 W/m²", self.preset_cloud, "Sudden drop in sunlight; watch it re-track."),
             ("Load too big (unreachable)", self.preset_unreachable,
              "50 Ω load: a buck can't pull the panel down to its MPP."),
+            ("Full day: clouds + tree shadow", self.preset_day,
+             "Partly cloudy equinox day, a tree shades the panel 07:00-09:00, fixed mount."),
         ):
             b = QPushButton(text)
             b.setToolTip(tip)
@@ -222,6 +315,16 @@ class MainWindow(QMainWindow):
         scroll.setMinimumWidth(400)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         return scroll
+
+    def _fill_speeds(self, day: bool):
+        self.cmb_speed.blockSignals(True)
+        self.cmb_speed.clear()
+        self.cmb_speed.addItems(DAY_SPEEDS if day else SPEEDS)
+        self.cmb_speed.setCurrentIndex(1)
+        self.cmb_speed.setToolTip(
+            "Simulated time per real second. Max = as fast as your computer allows." if day else
+            "MPPT steps simulated per screen frame (one step = 0.1 s).")
+        self.cmb_speed.blockSignals(False)
 
     # --------------------------------------------------------------------- plots
     def _build_plots(self) -> QWidget:
@@ -271,7 +374,6 @@ class MainWindow(QMainWindow):
 
         glw.nextRow()
         self.p_pow = glw.addPlot(title="Power over time", colspan=2)
-        self.p_pow.setLabel("bottom", "Time", "s")
         self.p_pow.setLabel("left", "Power", "W")
         self.p_pow.showGrid(x=True, y=True, alpha=0.3)
         self.p_pow.addLegend(offset=(10, 10))
@@ -282,21 +384,38 @@ class MainWindow(QMainWindow):
 
         glw.nextRow()
         self.p_duty = glw.addPlot(title="Duty cycle chosen by the MPPT")
-        self.p_duty.setLabel("bottom", "Time", "s")
         self.p_duty.setLabel("left", "Duty D")
         self.p_duty.showGrid(x=True, y=True, alpha=0.3)
         self.l_duty = self.p_duty.plot(pen=pg.mkPen((200, 120, 255), width=2))
 
         self.p_volt = glw.addPlot(title="Voltages")
-        self.p_volt.setLabel("bottom", "Time", "s")
         self.p_volt.setLabel("left", "Voltage", "V")
         self.p_volt.showGrid(x=True, y=True, alpha=0.3)
         self.p_volt.addLegend(offset=(10, 10))
         self.l_vmpp = self.p_volt.plot(pen=pg.mkPen(C_MPP, width=2, style=Qt.DashLine), name="V at true MPP")
         self.l_vpv = self.p_volt.plot(pen=pg.mkPen(C_CURVE, width=2), name="Panel V (in)")
         self.l_vout = self.p_volt.plot(pen=pg.mkPen(C_OP, width=2), name="Load V (out)")
-        self.p_volt.setXLink(self.p_duty)
-        self.p_pow.setXLink(self.p_duty)
+
+        glw.nextRow()
+        self.p_irr = glw.addPlot(title="Sunlight on the panel")
+        self.p_irr.setLabel("left", "Irradiance", "W/m²")
+        self.p_irr.showGrid(x=True, y=True, alpha=0.3)
+        self.l_irr = self.p_irr.plot(pen=pg.mkPen((255, 170, 40), width=2))
+
+        self.p_temp = glw.addPlot(title="Temperature")
+        self.p_temp.setLabel("left", "Temperature", "°C")
+        self.p_temp.showGrid(x=True, y=True, alpha=0.3)
+        self.p_temp.addLegend(offset=(10, 10))
+        self.l_tamb = self.p_temp.plot(pen=pg.mkPen((120, 200, 255), width=2), name="Air")
+        self.l_tcell = self.p_temp.plot(pen=pg.mkPen((255, 90, 90), width=2), name="Cell")
+
+        self.time_plots = (self.p_pow, self.p_duty, self.p_volt, self.p_irr, self.p_temp)
+        for p in self.time_plots:
+            p.setDownsampling(auto=True, mode="peak")
+            p.setClipToView(True)
+            if p is not self.p_duty:
+                p.setXLink(self.p_duty)
+        self._set_time_axis(day=False)
 
         hint = QLabel(
             "<b>How to read this:</b> the <span style='color:#ffc800'>★ star</span> is the best possible point. "
@@ -309,6 +428,15 @@ class MainWindow(QMainWindow):
         v.addWidget(hint)
         return w
 
+    def _set_time_axis(self, day: bool):
+        for p in self.time_plots:
+            if day:
+                p.setLabel("bottom", "Time of day", "h")
+            else:
+                p.setLabel("bottom", "Time", "s")
+            p.getAxis("bottom").enableAutoSIPrefix(not day)
+        self.p_duty.enableAutoRange(axis="x")
+
     # ------------------------------------------------------------- apply changes
     def _apply_all(self):
         self._load_mode_changed(self.cmb_load.currentText())
@@ -318,6 +446,8 @@ class MainWindow(QMainWindow):
         self._apply_algo()
 
     def _apply_conditions(self, *_):
+        if self.day_mode:
+            return  # the day environment drives the panel
         self.ch.cond = Conditions(
             g=self.sl_g.value(),
             shade=tuple(s.value() / 100.0 for s in self.sl_shade),
@@ -350,14 +480,24 @@ class MainWindow(QMainWindow):
         name = self.cmb_algo.currentData()
         d0 = self.ch.algo.duty if self.last is not None else 0.3
         kw = dict(d_init=d0)
+        variable = name in VARIABLE_STEP
         if name == "manual":
             kw["duty"] = self.sl_duty.value()
+        elif variable:
+            # the step adapts by itself; the box sets its upper limit
+            kw["step_max"] = self.sp_step.value()
         else:
             kw["step"] = self.sp_step.value()
         self.ch.algo = create_mppt(name, **kw)
         manual = name == "manual"
         self.sl_duty.setEnabled(manual)
         self.sp_step.setEnabled(not manual)
+        self.lbl_step.setText("Max step" if variable else "Step size")
+        self.sp_step.setToolTip(
+            "Variable step: the step shrinks near the peak and grows far from it,\n"
+            "up to this maximum." if variable else
+            "How much the duty cycle changes per MPPT step.\n"
+            "Bigger = faster but more wobble around the peak.")
 
     def _manual_duty(self, *_):
         if self.cmb_algo.currentData() == "manual":
@@ -365,11 +505,10 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ presets
     def _set(self, g=1000, t=30, shade=(0, 0, 0), mode="CR", setpoint=3.0, algo="po"):
+        if self.cmb_mode.currentIndex() != 0:
+            self.cmb_mode.setCurrentIndex(0)
         for w, val in ((self.sl_g, g), (self.sl_t, t), *zip(self.sl_shade, shade)):
-            w.blockSignals(True)
-            w.setValue(val)
-            w.blockSignals(False)
-            w._update_label()
+            w.show_value(val)
         self.cmb_load.blockSignals(True)
         self.cmb_load.setCurrentText(mode)
         self.cmb_load.blockSignals(False)
@@ -393,14 +532,83 @@ class MainWindow(QMainWindow):
     def preset_cloud(self):
         self._set(g=1000)
         self.reset(d_init=0.3)
-        QTimer.singleShot(4000, lambda: self.sl_g.setValue(300))
+        QTimer.singleShot(4000, lambda: None if self.day_mode else self.sl_g.setValue(300))
 
     def preset_unreachable(self):
         self._set(setpoint=50.0)
         self.reset(d_init=0.3)
 
+    def preset_day(self):
+        self._set()
+        self.de_date.setDate(QDate(2026, 3, 21))
+        self.cmb_sky.setCurrentIndex(self.cmb_sky.findData("partly_cloudy"))
+        self.sp_seed.setValue(3)
+        self.cmb_dayshade.setCurrentIndex(self.cmb_dayshade.findData("tree_morning"))
+        self.cmb_mount.setCurrentIndex(self.cmb_mount.findData("fixed"))
+        self.cmb_period.setCurrentIndex(0)
+        self.cmb_mode.setCurrentIndex(1)  # builds the day and starts it
+
+    # ----------------------------------------------------------------- day mode
+    def _mode_changed(self, idx: int):
+        day = idx == 1
+        self.timer.stop()
+        self.grp_day.setVisible(day)
+        for w in (self.sl_g, self.sl_t, *self.sl_shade):
+            w.setEnabled(not day)
+        self._fill_speeds(day)
+        self._set_time_axis(day)
+        if day:
+            self.start_day()
+            return
+        self.runner = self.day = None
+        self.ch.dt = LIVE_DT
+        self.hist = self._make_hist(HISTORY)
+        self.statusBar().clearMessage()
+        self._apply_conditions()
+        self.reset()
+        self.toggle_run()
+
+    def start_day(self):
+        if self.cmb_mode.currentIndex() != 1:
+            self.cmb_mode.setCurrentIndex(1)  # comes back here through _mode_changed
+            return
+        self.timer.stop()
+        qd = self.de_date.date()
+        env = DayEnvironment(
+            day=date(qd.year(), qd.month(), qd.day()),
+            weather=WeatherConfig(sky=self.cmb_sky.currentData(), seed=self.sp_seed.value()),
+            shading=list(SHADE_PRESETS[self.cmb_dayshade.currentData()]),
+        )
+        period = DAY_PERIODS[self.cmb_period.currentText()]
+        self.ch.dt = period
+        self.runner = DayRunner(self.ch, env, make_mount(self.cmb_mount.currentData()), env_dt=period)
+        if self.cmb_algo.currentData() == "manual":
+            self.ch.algo.set_duty(self.sl_duty.value())
+        self.hist = self._make_hist(HISTORY_DAY)
+        self.trail.clear()
+        self._next_rec = -1.0
+        self.statusBar().showMessage(
+            f"{env.day.isoformat()}: sunrise {_hhmm(env.sunrise_s)}, sunset {_hhmm(env.sunset_s)}, "
+            f"sky: {SKY_LABELS.get(env.sky, env.sky)}")
+        self._tick_once_and_draw()
+        self.p_duty.enableAutoRange(axis="x")
+        self.timer.start()
+        self.btn_run.setText("Pause")
+
+    def _day_finished(self):
+        self.timer.stop()
+        self.btn_run.setText("New day")
+        e = self.runner.energy
+        self.statusBar().showMessage(
+            f"Day finished: panel gave {e.pv_wh:.1f} Wh of {e.mpp_wh:.1f} Wh possible "
+            f"(MPPT {e.mppt_eff * 100:.1f} %), {e.out_wh:.1f} Wh reached the load, "
+            f"mount used {e.mount_wh:.2f} Wh, net {e.net_wh:.1f} Wh.")
+
     # ----------------------------------------------------------------- run loop
     def toggle_run(self):
+        if self.day_mode and self.runner.done:
+            self.start_day()
+            return
         if self.timer.isActive():
             self.timer.stop()
             self.btn_run.setText("Start")
@@ -411,7 +619,13 @@ class MainWindow(QMainWindow):
     def reset(self, *_, d_init: float | None = None):
         if d_init is not None:
             self.ch.algo.p.d_init = d_init
-        self.ch.reset()
+        if self.day_mode:
+            self.runner.reset()  # back to sunrise
+            self._next_rec = -1.0
+            if not self.timer.isActive():
+                self.btn_run.setText("Start")
+        else:
+            self.ch.reset()
         if self.cmb_algo.currentData() == "manual":
             self.ch.algo.set_duty(self.sl_duty.value())
         for d in self.hist.values():
@@ -419,35 +633,55 @@ class MainWindow(QMainWindow):
         self.trail.clear()
         self._tick_once_and_draw()
 
-    def _step(self):
-        s = self.ch.step()
+    def _step(self) -> bool:
+        """Advance one MPPT period. Returns False when the day is over."""
+        if self.day_mode:
+            if self.runner.done:
+                return False
+            ds = self.day = self.runner.step()
+            s, x, g, t_amb = ds.snap, ds.clock_h, ds.poa.total, ds.env.t_amb
+            record = ds.clock_s >= self._next_rec
+            if record:
+                self._next_rec = ds.clock_s + DAY_RECORD_S
+        else:
+            s = self.ch.step()
+            x, g, t_amb, record = s.t, self.ch.cond.g, self.ch.cond.t_amb, True
         self.last = s
-        h = self.hist
-        h["t"].append(s.t)
-        h["p_mpp"].append(s.p_mpp)
-        h["p_pv"].append(s.p_pv)
-        h["p_out"].append(s.p_out)
-        h["duty"].append(s.duty)
-        h["v_pv"].append(s.v_pv)
-        h["v_mpp"].append(s.curve.mpp.v)
-        h["v_out"].append(s.v_out)
         self.trail.append((s.v_pv, s.i_pv))
+        if record:
+            h = self.hist
+            for k, val in (("t", x), ("p_mpp", s.p_mpp), ("p_pv", s.p_pv), ("p_out", s.p_out),
+                           ("duty", s.duty), ("v_pv", s.v_pv), ("v_mpp", s.curve.mpp.v),
+                           ("v_out", s.v_out), ("g", g), ("t_amb", t_amb), ("t_cell", s.t_cell)):
+                h[k].append(val)
+        return True
+
+    def _steps_per_frame(self) -> int:
+        if not self.day_mode:
+            return SPEEDS.get(self.cmb_speed.currentText(), 5)
+        sim_s = DAY_SPEEDS.get(self.cmb_speed.currentText(), 600) * self.timer.interval() / 1000.0
+        return int(max(1, min(round(sim_s / self.ch.dt), 1e6)))
 
     def _tick(self):
-        for _ in range(SPEEDS[self.cmb_speed.currentText()]):
-            self._step()
+        t0 = time.perf_counter()
+        for _ in range(self._steps_per_frame()):
+            if not self._step():
+                self._draw()
+                self._day_finished()
+                return
+            if self.day_mode and time.perf_counter() - t0 > FRAME_BUDGET_S:
+                break
         self._draw()
 
     def _tick_once_and_draw(self):
-        self._step()
-        self._draw()
+        if self._step():
+            self._draw()
 
     def _redraw_curves_only(self):
         # conditions changed while paused: show the new curve, keep the old point
         if self.last is None:
             return
-        curve = self.ch.curve()
-        self._draw_curve(curve)
+        self._draw_curve(self.ch.curve())
 
     # --------------------------------------------------------------------- draw
     def _draw_curve(self, curve):
@@ -475,16 +709,24 @@ class MainWindow(QMainWindow):
             it["meas"].setData([s.v_meas], [y_of(s.v_meas, s.i_meas)])
 
         h = {k: np.fromiter(d, float) for k, d in self.hist.items()}
-        self.l_pmpp.setData(h["t"], h["p_mpp"])
-        self.l_ppv.setData(h["t"], h["p_pv"])
-        self.l_pout.setData(h["t"], h["p_out"])
-        self.l_duty.setData(h["t"], h["duty"])
-        self.l_vmpp.setData(h["t"], h["v_mpp"])
-        self.l_vpv.setData(h["t"], h["v_pv"])
-        self.l_vout.setData(h["t"], h["v_out"])
+        for line, key in ((self.l_pmpp, "p_mpp"), (self.l_ppv, "p_pv"), (self.l_pout, "p_out"),
+                          (self.l_duty, "duty"), (self.l_vmpp, "v_mpp"), (self.l_vpv, "v_pv"),
+                          (self.l_vout, "v_out"), (self.l_irr, "g"), (self.l_tamb, "t_amb"),
+                          (self.l_tcell, "t_cell")):
+            line.setData(h["t"], h[key])
 
-        self.lbl_time.setText(f"Simulated time: {s.t:.1f} s   ({len(h['t'])} samples shown)")
+        ds = self.day if self.day_mode else None
+        if ds is not None:
+            self.sl_g.show_value(ds.poa.total)
+            self.sl_t.show_value(ds.env.t_amb)
+            for w, sh in zip(self.sl_shade, self.ch.cond.shade):
+                w.show_value(100.0 * sh)
+            self.lbl_time.setText(f"Clock {_hhmm(ds.clock_s, sec=True)}   "
+                                  f"({min(self.runner.progress, 1.0) * 100:.0f} % of the day)")
+        else:
+            self.lbl_time.setText(f"Simulated time: {s.t:.1f} s   ({len(h['t'])} samples shown)")
         self.lbl_tcell.setText(f"{s.t_cell:.1f} °C  (panel heats up in the sun)")
+
         te = s.tracking_eff * 100
         te_col = "#28c050" if te >= 98 else ("#e0a000" if te >= 90 else "#e04040")
         self.lbl_big.setText(
@@ -497,13 +739,35 @@ class MainWindow(QMainWindow):
             f"<td><b>Load (output)</b><br>{s.v_out:.2f} V × {s.i_out:.3f} A<br>= <b>{s.p_out:.2f} W</b></td>"
             f"<td><b>Converter</b><br>efficiency {s.conv_eff * 100:.1f} %<br>losses {s.p_loss:.2f} W"
             f" &nbsp;[{s.conv_mode}]</td>"
-            f"</tr></table>"
+            f"</tr>{self._day_row(ds) if ds is not None else ''}</table>"
         )
         warn = []
-        if not s.reach.reachable:
+        if not s.reach.reachable and s.p_mpp > 0.5:
             warn.append("MPP UNREACHABLE — " + s.reach.reason
                         + ". Lower the load resistance (or raise its current) so the buck can reach the peak.")
-        if s.collapsed:
+        if s.collapsed and (ds is None or s.p_mpp > 0.5):
             warn.append("Converter is OFF: panel voltage collapsed below the converter's minimum input.")
         self.lbl_warn.setText("\n".join(warn))
         self.lbl_warn.setVisible(bool(warn))
+
+    def _day_row(self, ds: DaySnapshot) -> str:
+        e = ds.energy
+        eff = e.mppt_eff * 100
+        col = "#28c050" if eff >= 98 else ("#e0a000" if eff >= 90 else "#e04040")
+        env = self.runner.env
+        shade = ("<br><b style='color:#ff8c00'>shadow on panel</b>"
+                 if ds.env.shade_label != "normal" and any(self.ch.cond.shade) else "")
+        return (
+            f"<tr>"
+            f"<td><b>Day so far</b><br><span style='font-size:22px;color:{col}'>{eff:.1f} %</span>"
+            f"<br><small>MPPT efficiency (energy)</small></td>"
+            f"<td><b>Energy from panel</b><br><b>{e.pv_wh:.1f} Wh</b> of {e.mpp_wh:.1f} Wh possible"
+            f"<br><small>lost to tracking: {e.mpp_wh - e.pv_wh:.2f} Wh</small></td>"
+            f"<td><b>Clock</b><br><span style='font-size:22px'>{_hhmm(ds.clock_s)}</span>"
+            f"<br><small>{SKY_LABELS.get(env.sky, env.sky)}, sun {ds.env.sun.elevation:.0f}° up</small>{shade}</td>"
+            f"<td><b>Energy to load</b><br><b>{e.out_wh:.1f} Wh</b>"
+            f"<br><small>sunlight {e.poa_wh_m2 / 1000:.2f} kWh/m²</small></td>"
+            f"<td><b>Mount</b> tilt {ds.tilt:.0f}°, az {ds.azimuth:.0f}°<br>"
+            f"motor + standby {e.mount_wh:.2f} Wh<br><b>net {e.net_wh:.1f} Wh</b></td>"
+            f"</tr>"
+        )

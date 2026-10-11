@@ -1,0 +1,100 @@
+"""Run a LiveChannel through a simulated day (sunrise to sunset).
+
+Every MPPT step advances the clock by `channel.dt`.  The environment (sun,
+clouds, temperature, shadows) and the mount orientation are refreshed every
+`env_dt` seconds of simulated time, which keeps the cost of rebuilding I-V
+curves bounded.  Energies are integrated as the day goes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ..environment.day import DayEnvironment, EnvSample
+from ..environment.irradiance import POA
+from .live import LiveChannel, Snapshot
+
+
+@dataclass
+class DayEnergy:
+    pv_wh: float = 0.0  # energy taken from the panel
+    mpp_wh: float = 0.0  # best possible (true MPP all day)
+    out_wh: float = 0.0  # delivered to the load
+    poa_wh_m2: float = 0.0  # plane-of-array insolation
+    mount_wh: float = 0.0  # tracker motor + standby
+
+    @property
+    def mppt_eff(self) -> float:
+        return self.pv_wh / self.mpp_wh if self.mpp_wh > 1e-9 else 0.0
+
+    @property
+    def net_wh(self) -> float:
+        return self.out_wh - self.mount_wh
+
+
+@dataclass
+class DaySnapshot:
+    snap: Snapshot
+    clock_s: float  # seconds after local midnight
+    env: EnvSample
+    poa: POA
+    tilt: float
+    azimuth: float
+    energy: DayEnergy
+
+    @property
+    def clock_h(self) -> float:
+        return self.clock_s / 3600.0
+
+
+class DayRunner:
+    def __init__(self, channel: LiveChannel, env: DayEnvironment, mount, env_dt: float = 1.0,
+                 margin_s: float = 300.0):
+        self.ch, self.env, self.mount = channel, env, mount
+        self.env_dt = env_dt
+        self.t_start = env.sunrise_s - margin_s
+        self.t_end = env.sunset_s + margin_s
+        self.reset()
+
+    def reset(self) -> None:
+        self.ch.reset()
+        self.mount.reset()
+        self.clock = self.t_start
+        self.energy = DayEnergy()
+        self._next_env = self.clock
+        self._env: EnvSample | None = None
+        self._poa: POA | None = None
+        self._refresh_env(force=True)
+
+    @property
+    def done(self) -> bool:
+        return self.clock >= self.t_end
+
+    @property
+    def progress(self) -> float:
+        return (self.clock - self.t_start) / (self.t_end - self.t_start)
+
+    def _refresh_env(self, force: bool = False) -> None:
+        if not force and self.clock < self._next_env:
+            return
+        dt = max(self.env_dt, self.ch.dt) if not force else 0.0
+        s = self.env.sample(self.clock)
+        tilt, az = self.mount.update(s.sun, dt)
+        cond, poa = self.env.conditions(s, tilt, az)
+        self.ch.cond = cond
+        self._env, self._poa = s, poa
+        self._next_env = self.clock + self.env_dt
+
+    def step(self) -> DaySnapshot:
+        self._refresh_env()
+        snap = self.ch.step()
+        dt_h = self.ch.dt / 3600.0
+        e = self.energy
+        e.pv_wh += snap.p_pv * dt_h
+        e.mpp_wh += snap.p_mpp * dt_h
+        e.out_wh += snap.p_out * dt_h
+        e.poa_wh_m2 += self._poa.total * dt_h
+        e.mount_wh = self.mount.energy_wh
+        self.clock += self.ch.dt
+        tilt, az = self.mount.orientation
+        return DaySnapshot(snap, self.clock, self._env, self._poa, tilt, az, e)

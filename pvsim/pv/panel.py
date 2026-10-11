@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import NamedTuple, Sequence
 
 import numpy as np
-from scipy.optimize import brentq, minimize_scalar
+from scipy.optimize import brentq
 from scipy.signal import find_peaks
 
 from .datasheet import PanelDatasheet, SingleDiodeParams, fit_single_diode, params_at
@@ -172,19 +172,25 @@ class Panel:
         v_oc = float(v[-1])
 
         p = v * i
-        exact = lambda vv: vv * self._current_on(vv, subs, shorted, i_max)  # noqa: E731
 
         def refine(k: int) -> PowerPoint:
-            lo, hi = v[max(k - 1, 0)], v[min(k + 1, len(v) - 1)]
-            if hi <= lo:
-                return PowerPoint(float(v[k]), float(i[k]), float(p[k]))
-            r = minimize_scalar(lambda x: -exact(x), bounds=(lo, hi), method="bounded",
-                                options={"xatol": 1e-6})
-            vb = float(r.x)
-            ib = self._current_on(vb, subs, shorted, i_max)
-            if vb * ib < p[k]:
-                return PowerPoint(float(v[k]), float(i[k]), float(p[k]))
-            return PowerPoint(vb, ib, vb * ib)
+            # Refine in the current domain, where V(I) is explicit: P(I) = I*V(I)
+            # is evaluated on a dense local grid, zooming in twice (vectorized).
+            lo = float(i[min(k + 1, len(i) - 1)])
+            hi = float(i[max(k - 1, 0)])
+            best = PowerPoint(float(v[k]), float(i[k]), float(p[k]))
+            for _ in range(3):
+                if hi <= lo:
+                    break
+                ig = np.linspace(lo, hi, 64)
+                vg = self._v_of_i(ig, subs, shorted)
+                pg = ig * vg
+                j = int(np.argmax(pg))
+                if pg[j] > best.p:
+                    best = PowerPoint(float(vg[j]), float(ig[j]), float(pg[j]))
+                step = (hi - lo) / 63
+                lo, hi = max(ig[j] - step, lo), min(ig[j] + step, hi)
+            return best
 
         pmax = float(p.max())
         peaks, _ = find_peaks(np.concatenate(([0.0], p, [0.0])), prominence=0.005 * pmax)

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pvsim"
+version = "0.1.0"
+description = "PV panel + buck converter + MPPT simulator (ESP32 / INA226 test bench and ML dataset generator)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.5", "pyqtgraph>=0.13"]
+hil = ["pyserial>=3.5"]
+dev = ["pytest>=7", "pvlib>=0.10"]
+
+[project.scripts]
+pvsim = "pvsim.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pvsim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

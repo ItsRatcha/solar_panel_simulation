@@ -21,7 +21,8 @@ def test_tracker_poa_not_below_fixed_under_clear_sky():
         of = fixed.update(s.sun, 10.0)
         ot = trk.update(s.sun, 10.0)
         # Only where beam dominates: in diffuse light a sun-pointing panel can
-        # lose to a flatter one (Kelly & Gibson 2009, Solar Energy 83:2092).
+        # lose to a flatter one (Kelly & Gibson 2009, Solar Energy 83(11):2092-2102,
+        # doi:10.1016/j.solener.2009.08.009).
         if s.irr.dni * math.sin(math.radians(s.sun.elevation)) > s.irr.dhi:
             worse += env.poa(s, *ot).total < env.poa(s, *of).total - 1.0
         t += 10.0

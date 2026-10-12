@@ -5,6 +5,13 @@ surface normal clockwise from north [deg].  The tracker aims its normal at
 the sun, but only moves when the pointing error exceeds a deadband, moves at
 a finite angular speed per axis, and returns to a stow position at night.
 Its energy use is motor power while moving plus controller standby power.
+
+The pointing error is the angle of incidence of the beam on the panel
+normal (Duffie & Beckman, Solar Engineering of Thermal Processes, eq. 1.6.3).
+A 2-axis tracker with zero pointing error maximises beam on the plane
+(Duffie & Beckman sec. 1.7).
+ASSUMPTION: every TrackerParams value (deadband, speed, tilt limit, motor
+and standby power, stow) is a design placeholder for the prototype tracker.
 """
 
 from __future__ import annotations

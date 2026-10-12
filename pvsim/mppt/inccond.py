@@ -1,4 +1,5 @@
-"""Incremental Conductance (Hussein et al., IEE Proc. 1995).
+"""Incremental Conductance (Hussein, Muta, Hoshino & Osakada, IEE Proc.
+Gener. Transm. Distrib. 142(1):59-64, 1995).
 
 At the MPP dP/dV = 0, i.e. dI/dV = -I/V.  With g = dI/dV + I/V:
     g > 0 : left of MPP (V too low)  -> raise V -> decrease D
@@ -6,6 +7,13 @@ At the MPP dP/dV = 0, i.e. dI/dV = -I/V.  With g = dI/dV + I/V:
     |g| <= eps_g : hold
 When V did not change (dV = 0) the sign of dI tells whether irradiance rose
 (dI > 0 -> MPP moved to higher V) or fell.
+
+Variable step (inccond_variable): step = clip(N * |dP/dV|, step_min,
+step_max), Liu, Duan, Liu, Liu & Kang, IEEE Trans. Ind. Electron.
+55(7):2622-2628, 2008.
+ASSUMPTION: N, step_min, step_max and the 4 x step back-off when the input
+collapses (V <= eps_v) are untuned defaults; tune step and period to the
+converter dynamics (Femia et al., IEEE TPEL 20(4):963-973, 2005).
 """
 
 from __future__ import annotations

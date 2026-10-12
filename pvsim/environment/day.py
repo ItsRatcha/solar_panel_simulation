@@ -6,18 +6,17 @@ per-substring irradiance seen by a panel with that orientation.
 
 Shading events model objects (tree, pole, bird) that block the *beam* on
 some substrings; diffuse light still reaches the shaded cells, so the
-effective blocked fraction is depth * beam / POA.
+effective blocked fraction is depth * beam / POA.  ASSUMPTION: the shade
+presets (times, depths, ramp) are illustrative scenarios, not measurements.
 """
 
 from __future__ import annotations
-
-import math
 
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 
 from ..engine.live import Conditions
-from .irradiance import POA, Irradiance, clearsky_ineichen, poa_hay_davies
+from .irradiance import POA, Irradiance, clearsky_ineichen, erbs, poa_hay_davies
 from .solar_position import Site, SunPosition, sun_position, sunrise_sunset
 from .weather import Weather, WeatherConfig
 
@@ -90,14 +89,9 @@ class DayEnvironment:
         sun = sun_position(when, self.site)
         clear = clearsky_ineichen(sun.zenith, self.doy, self.weather.linke, self.site.altitude_m)
         kc = self.wx.kc(t)
-        # Beam is blocked faster than diffuse: DNI scales with a steep function
-        # of kc, and DHI makes up the rest of GHI (continuous in kc).
-        ghi = clear.ghi * kc
-        fb = min(max((kc - 0.25) / 0.75, 0.0), 1.2) ** 1.5
-        dni = clear.dni * fb
-        cos_z = max(math.cos(math.radians(sun.zenith)), 0.0)
-        dni = min(dni, ghi / cos_z) if cos_z > 0.01 else 0.0
-        irr = Irradiance(ghi, dni, max(ghi - dni * cos_z, 0.0))
+        # All-sky GHI = kc * clear-sky GHI (definition of the clear-sky index),
+        # split into beam and diffuse with Erbs, Klein & Duffie (1982).
+        irr = erbs(clear.ghi * kc, sun.zenith, self.doy)
         depth = [0.0] * self.n_sub
         label = "normal"
         for ev in self.shading:

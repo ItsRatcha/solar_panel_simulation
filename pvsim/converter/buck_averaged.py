@@ -26,6 +26,9 @@ The input current follows from the power balance
     Iin = (Pout + sum P_loss) / Vin
 
 so Pin = Pout + losses holds exactly at every step.
+
+ASSUMPTION: the BuckParams component values are typical placeholders for
+the prototype board; replace them with the chosen parts' datasheet values.
 """
 
 from __future__ import annotations

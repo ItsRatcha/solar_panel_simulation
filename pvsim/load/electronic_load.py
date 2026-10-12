@@ -12,6 +12,9 @@ CC : I = I_set * min(1, V / v_min)       (current folds back near 0 V, as a
                                             cannot hold its voltage)
 CV : I = clip((V - V_set) / r_cv, 0, i_max) (stiff sink above V_set)
 OFF: I = 0
+
+ASSUMPTION: v_min, r_cv and i_max are placeholders, not taken from a
+specific e-load datasheet.
 """
 
 from __future__ import annotations

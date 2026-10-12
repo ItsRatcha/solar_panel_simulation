@@ -1,3 +1,4 @@
+import math
 from datetime import date
 
 import pytest
@@ -19,7 +20,9 @@ def test_tracker_poa_not_below_fixed_under_clear_sky():
         s = env.sample(t)
         of = fixed.update(s.sun, 10.0)
         ot = trk.update(s.sun, 10.0)
-        if s.sun.elevation > 5:
+        # Only where beam dominates: in diffuse light a sun-pointing panel can
+        # lose to a flatter one (Kelly & Gibson 2009, Solar Energy 83:2092).
+        if s.irr.dni * math.sin(math.radians(s.sun.elevation)) > s.irr.dhi:
             worse += env.poa(s, *ot).total < env.poa(s, *of).total - 1.0
         t += 10.0
     assert worse == 0

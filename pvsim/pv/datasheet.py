@@ -34,7 +34,17 @@ def thermal_voltage(t_kelvin: float) -> float:
 
 @dataclass
 class PanelDatasheet:
-    """Values as printed on a PV module datasheet (STC unless noted)."""
+    """Values as printed on a PV module datasheet (STC unless noted).
+
+    ASSUMPTION: the defaults are a generic 50 W / 36-cell module standing in
+    for the panels in the EE06 proposal (~50 W mono, not yet purchased);
+    replace them with the purchased module's datasheet.  The ratios are in
+    the published ranges: Vmp/Voc = 0.833 vs Kpv = 0.816 measured by Baimel
+    et al. (Electronics 8(3):321, 2019; Kpv 0.7-0.9 across panels), and
+    Imp/Isc = 0.927 within the FSCC k = 0.9-0.98 (Suryakumari 2013, weak
+    venue, background only).  NOCT 45 degC is the typical value used with the
+    NOCT model (Skoplaki & Palyvos, Renew. Energy 34:23-29, 2009).
+    """
 
     name: str = "Generic 50 W mono (36 cells)"
     p_max: float = 50.0  # [W]

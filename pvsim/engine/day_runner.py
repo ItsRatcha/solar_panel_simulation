@@ -31,6 +31,8 @@ class DayEnergy:
 
     @property
     def mppt_eff(self) -> float:
+        """Energy-based MPPT efficiency, integral(P_pv) / integral(P_mpp)
+        (EN 50530:2010+A1:2013; IEC 62891:2020)."""
         return self.pv_wh / self.mpp_wh if self.mpp_wh > 1e-9 else 0.0
 
     @property

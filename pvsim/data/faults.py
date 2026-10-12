@@ -14,6 +14,15 @@ kind perturbs one part of the channel:
 `FaultSchedule.apply` is called by the DayRunner every step, after the
 environment refresh; it derives conditions from the unfaulted base, so the
 perturbations never compound and are undone as soon as a window closes.
+
+Fault classes follow the PV fault taxonomies of Mellit et al. (2018, Renew.
+Sustain. Energy Rev. 91:1-17) and Pillai & Rajasekar (2018, Renew. Sustain.
+Energy Rev. 91:18-40).  Shading acts on substring irradiance and a shorted
+bypass diode removes one substring from the I-V curve, as in the
+substring/bypass model of Silvestre et al. (2009).
+ASSUMPTION: the default magnitudes in FAULT_KINDS (shade depths, 20 %
+soiling loss, 0.5 V / 0.1 A sensor offset) are illustrative labels for ML
+datasets, not measured values.
 """
 
 from __future__ import annotations

@@ -158,7 +158,7 @@ class Scenario:
         if unknown:
             raise ValueError(f"unknown scenario fields: {sorted(unknown)}")
         if "weather" in d:
-            d["weather"] = WeatherConfig(**d["weather"])
+            d["weather"] = WeatherConfig.from_dict(d["weather"])
         if "panels" in d:
             d["panels"] = [PanelSpec.from_dict(p) for p in d["panels"]]
         if "faults" in d:

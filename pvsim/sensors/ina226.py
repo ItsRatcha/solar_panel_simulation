@@ -9,7 +9,10 @@ Each reading is the average of `avg` conversions of the bus and the shunt
 channel, so one sample takes avg * (t_conv_bus + t_conv_shunt) and the
 conversion noise is reduced by sqrt(avg).  Noise figures are given per
 single conversion at 1.1 ms and scaled by sqrt(1.1 ms / t_conv).
-Gain/offset errors model calibration error or an injected sensor fault.
+Gain/offset errors model calibration error or an injected sensor fault;
+datasheet limits (typ/max): shunt offset 2.5/10 uV, bus offset 1.25/7.5 mV,
+gain error 0.02/0.1 %.  Defaults are 0 (ideal calibration).
+ASSUMPTION: noise_v and noise_shunt are estimates, not datasheet values.
 """
 
 from __future__ import annotations

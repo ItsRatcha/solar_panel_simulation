@@ -4,8 +4,11 @@ A coarse sweep of D over [d_min, d_max] finds the region of the global
 maximum; P&O then refines locally.  A rescan is triggered every
 `scan_period` steps or when power jumps by more than `dp_trigger` relative to
 a slow reference (sudden shading / irradiance change).  Similar in spirit to
-the periodic scanning approaches reviewed by Liu et al. (2015, RSER) and
-Patel & Agarwal (IEEE TIE 2008).
+the periodic scanning approaches of Patel & Agarwal (IEEE Trans. Ind.
+Electron. 55(4):1689-1698, 2008) and reviewed by Ahmed & Salam (Renew.
+Sustain. Energy Rev. 47:933-953, 2015).
+ASSUMPTION: scan_points, scan_period, dp_trigger and ref_alpha are untuned
+defaults, not values from those papers.
 """
 
 from __future__ import annotations

@@ -2,8 +2,11 @@
 
 For a buck feeding the load, raising D lowers the panel voltage.  P&O keeps
 perturbing D in the same direction while power rises and reverses when it
-falls (Femia et al., IEEE TPEL 2005).  Variable step uses
-step = clip(N * |dP/dV|, step_min, step_max) (Liu et al., IEEE TCAS-II 2008).
+falls (Femia, Petrone, Spagnuolo & Vitelli, IEEE TPEL 20(4):963-973, 2005).
+Variable step uses step = clip(N * |dP/dV|, step_min, step_max) (Liu, Duan,
+Liu, Liu & Kang, IEEE Trans. Ind. Electron. 55(7):2622-2628, 2008).
+ASSUMPTION: the step sizes and N are untuned defaults; Femia et al. show
+step and sampling period must be matched to the converter dynamics.
 """
 
 from __future__ import annotations

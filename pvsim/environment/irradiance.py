@@ -1,7 +1,10 @@
 """Clear-sky irradiance, GHI decomposition and plane-of-array transposition.
 
-* Clear sky: Ineichen & Perez (2002) with Linke turbidity TL (default 4.5,
-  typical of humid tropical air) and Kasten & Young (1989) air mass.
+* Clear sky: Ineichen & Perez (2002) with Linke turbidity TL and Kasten &
+  Young (1989) air mass.  ASSUMPTION: TL = 4.5 (humid tropical air); use the
+  site's monthly value from the SoDa/Remund (2003) climatology when known.
+* Solar constant 1360.8 W/m^2 (Kopp & Lean 2011, GRL 38:L01706) and the
+  Earth-Sun distance factor of Spencer (1971).
 * Decomposition of measured/cloudy GHI into DNI + DHI: Erbs et al. (1982).
 * Transposition to a tilted plane: Hay & Davies (1980) sky diffuse model
   plus isotropic ground reflection with albedo rho.
@@ -14,7 +17,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-SOLAR_CONSTANT = 1361.0
+SOLAR_CONSTANT = 1360.8  # total solar irradiance [W/m^2], Kopp & Lean (2011)
 
 
 @dataclass(frozen=True)
@@ -34,7 +37,7 @@ class POA:
 
 
 def extraterrestrial(day_of_year: int) -> float:
-    """Extraterrestrial normal irradiance (Spencer 1971)."""
+    """Extraterrestrial normal irradiance; Earth-Sun distance factor of Spencer (1971)."""
     b = 2 * math.pi * (day_of_year - 1) / 365.0
     return SOLAR_CONSTANT * (1.00011 + 0.034221 * math.cos(b) + 0.00128 * math.sin(b)
                              + 0.000719 * math.cos(2 * b) + 0.000077 * math.sin(2 * b))

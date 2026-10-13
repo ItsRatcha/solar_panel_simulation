@@ -37,8 +37,9 @@ def register_mppt(name: str):
     return deco
 
 
-def available_mppt() -> list[str]:
-    return list(_REGISTRY)
+def available_mppt(hardware: bool = True) -> list[str]:
+    """Registered names; hardware=False leaves out plugins that need a device (serial_esp32)."""
+    return [n for n, c in _REGISTRY.items() if hardware or not c.hardware]
 
 
 def mppt_class(name: str) -> type["MPPTAlgorithm"]:
@@ -72,6 +73,7 @@ class BaseState:
 
 class MPPTAlgorithm:
     name: ClassVar[str] = "base"
+    hardware: ClassVar[bool] = False  # True: decisions come from an external device
     Params: ClassVar[type] = BaseParams
     State: ClassVar[type] = BaseState
 

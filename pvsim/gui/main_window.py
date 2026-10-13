@@ -311,7 +311,7 @@ class MainWindow(QMainWindow):
         g = QGroupBox("MPPT algorithm (panel A)")
         f = QFormLayout(g)
         self.cmb_algo = QComboBox()
-        for name in available_mppt():
+        for name in available_mppt(hardware=False):
             self.cmb_algo.addItem(ALGO_LABELS.get(name, name), name)
         self.sp_step = QDoubleSpinBox()
         self.sp_step.setDecimals(4)
@@ -339,7 +339,7 @@ class MainWindow(QMainWindow):
         self.chk_b.setToolTip("B sees the same sun, shade and load as A.\n"
                               "Pick a different converter, algorithm or (in day mode) mount.")
         self.cmb_algo_b = QComboBox()
-        for name in available_mppt():
+        for name in available_mppt(hardware=False):
             self.cmb_algo_b.addItem(ALGO_LABELS.get(name, name), name)
         self.cmb_algo_b.setCurrentIndex(self.cmb_algo_b.findData("global_scan"))
         self.cmb_mount_b = QComboBox()

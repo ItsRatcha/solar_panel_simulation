@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 
 from ..engine.live import Conditions
-from .irradiance import POA, Irradiance, clearsky_ineichen, erbs, poa_hay_davies
+from .irradiance import POA, Irradiance, clearsky_ineichen, erbs, linke_turbidity, poa_hay_davies
 from .solar_position import Site, SunPosition, sun_position, sunrise_sunset
 from .weather import Weather, WeatherConfig
 
@@ -79,6 +79,8 @@ class DayEnvironment:
         self.sunset_s = (sset - self.midnight).total_seconds()
         self.wx = Weather(self.weather, self.sunrise_s / 3600, self.sunset_s / 3600)
         self.doy = self.day.timetuple().tm_yday
+        self.linke = (self.weather.linke if self.weather.linke is not None
+                      else linke_turbidity(self.day))
 
     @property
     def sky(self) -> str:
@@ -87,7 +89,7 @@ class DayEnvironment:
     def sample(self, t: float) -> EnvSample:
         when = self.midnight + timedelta(seconds=t)
         sun = sun_position(when, self.site)
-        clear = clearsky_ineichen(sun.zenith, self.doy, self.weather.linke, self.site.altitude_m)
+        clear = clearsky_ineichen(sun.zenith, self.doy, self.linke, self.site.altitude_m)
         kc = self.wx.kc(t)
         # All-sky GHI = kc * clear-sky GHI (definition of the clear-sky index),
         # split into beam and diffuse with Erbs, Klein & Duffie (1982).

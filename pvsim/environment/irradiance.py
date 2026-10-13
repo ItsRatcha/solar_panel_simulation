@@ -1,8 +1,8 @@
 """Clear-sky irradiance, GHI decomposition and plane-of-array transposition.
 
 * Clear sky: Ineichen & Perez (2002) with Linke turbidity TL and Kasten &
-  Young (1989) air mass.  ASSUMPTION: TL = 4.5 (humid tropical air); use the
-  site's monthly value from the SoDa/Remund (2003) climatology when known.
+  Young (1989) air mass.  TL defaults to the monthly Remund et al. (2003)
+  climatology at the default site, interpolated daily (see linke_turbidity).
 * Solar constant 1360.8 W/m^2 (Kopp & Lean 2011, GRL 38:L01706) and the
   Earth-Sun distance factor of Spencer (1971).
 * Decomposition of measured/cloudy GHI into DNI + DHI: Erbs et al. (1982).
@@ -14,10 +14,18 @@ All angles in degrees, irradiance in W/m^2.
 
 from __future__ import annotations
 
+import calendar
 import math
 from dataclasses import dataclass
+from datetime import date
 
 SOLAR_CONSTANT = 1360.8  # total solar irradiance [W/m^2], Kopp & Lean (2011)
+
+# Monthly Linke turbidity (Jan..Dec) at the default site, 14.07 N 100.60 E,
+# from the Remund et al. (2003) worldwide climatology as shipped with pvlib
+# (clearsky.lookup_linke_turbidity, interp_turbidity=False).  Annual mean 4.55.
+# Only valid near the default site; set WeatherConfig.linke for other sites.
+LINKE_MONTHLY = (3.55, 3.75, 4.35, 4.80, 5.00, 5.20, 5.25, 5.30, 5.00, 4.55, 4.05, 3.80)
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,24 @@ def airmass(zenith: float) -> float:
     return 1.0 / (math.cos(math.radians(zenith)) + 0.50572 * (96.07995 - zenith) ** -1.6364)
 
 
+def linke_turbidity(day: date, monthly: tuple[float, ...] = LINKE_MONTHLY) -> float:
+    """Daily Linke turbidity: monthly values placed at mid-month and linearly
+    interpolated by day of year, wrapping Dec -> Jan (same scheme as pvlib)."""
+    mdays = [calendar.monthrange(day.year, m)[1] for m in range(1, 13)]
+    mids, start = [-31 / 2.0], 0
+    for n in mdays:
+        mids.append(start + n / 2.0)
+        start += n
+    mids.append(start + 31 / 2.0)
+    vals = [monthly[-1], *monthly, monthly[0]]
+    doy = day.timetuple().tm_yday
+    for i in range(len(mids) - 1):
+        if mids[i] <= doy <= mids[i + 1]:
+            f = (doy - mids[i]) / (mids[i + 1] - mids[i])
+            return vals[i] + f * (vals[i + 1] - vals[i])
+    raise ValueError(day)
+
+
 def clearsky_ineichen(zenith: float, day_of_year: int, linke: float = 4.5,
                       altitude_m: float = 0.0) -> Irradiance:
     if zenith >= 90.0:
@@ -66,8 +92,9 @@ def clearsky_ineichen(zenith: float, day_of_year: int, linke: float = 4.5,
     ghi = max(ghi, 0.0)
     b = 0.664 + 0.163 / fh1
     dni = b * e0 * math.exp(-0.09 * am_abs * (linke - 1))
-    # DNI cannot exceed what GHI implies
-    dni_cap = (ghi * (1 - (0.1 - 0.2 * math.exp(-linke)) / (0.1 + 0.882 / fh1))) / cos_z
+    # DNI cannot exceed what GHI implies; Ineichen & Perez (2002) App. A, p. 157
+    # (pvlib uses 0.882 here; the paper prints 0.88)
+    dni_cap = (ghi * (1 - (0.1 - 0.2 * math.exp(-linke)) / (0.1 + 0.88 / fh1))) / cos_z
     dni = max(min(dni, dni_cap), 0.0)
     dhi = max(ghi - dni * cos_z, 0.0)
     return Irradiance(ghi, dni, dhi)

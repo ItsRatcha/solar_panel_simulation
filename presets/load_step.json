@@ -16,8 +16,7 @@
     "seed": 1,
     "t_min": 25.5,
     "t_max": 34.0,
-    "t_peak_hour": 14.5,
-    "linke": 4.5
+    "linke": null
   },
   "shading": "none",
   "faults": [],

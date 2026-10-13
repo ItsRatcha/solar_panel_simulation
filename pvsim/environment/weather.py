@@ -65,7 +65,9 @@ class WeatherConfig:
     seed: int = 1
     t_min: float = 25.5  # daily minimum [degC]           ASSUMPTION (site)
     t_max: float = 34.0  # daily maximum, clear sky [degC] ASSUMPTION (site)
-    linke: float = 4.5  # Linke turbidity for Ineichen-Perez clear sky
+    # Linke turbidity for Ineichen-Perez clear sky; None = monthly Remund
+    # (2003) climatology for the date (see irradiance.linke_turbidity)
+    linke: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -136,12 +138,12 @@ class Weather:
         t_max = c.t_min + (c.t_max - c.t_min) * self.params.t_swing
         y = sset - rise  # day length [h]
 
-        def day(m: float) -> float:  # m = hours after (sunrise + c)
-            return t_min + (t_max - t_min) * math.sin(math.pi * m / (y + 2 * (PL_A - PL_C)))
+        def day(m: float) -> float:  # m = hours after (sunrise + c); eq. 1, p. 206
+            return t_min + (t_max - t_min) * math.sin(math.pi * m / (y + 2 * PL_A))
 
         if rise + PL_C < h < sset:
             return day(h - rise - PL_C)
         t_sn = day(sset - rise - PL_C)  # temperature at sunset
         n = h - sset if h >= sset else h + 24.0 - sset  # hours after sunset
-        z = 24.0 - y + PL_C  # night length up to the minimum [h]
+        z = 24.0 - y  # night length Z [h]; eq. 2, p. 206
         return t_min + (t_sn - t_min) * math.exp(-PL_B * n / z)

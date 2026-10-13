@@ -3,9 +3,10 @@ from datetime import date, datetime
 import pytest
 
 from pvsim.environment.day import DayEnvironment, ShadeEvent
-from pvsim.environment.irradiance import Irradiance, clearsky_ineichen, erbs, poa_hay_davies
+from pvsim.environment.irradiance import (Irradiance, clearsky_ineichen, erbs, linke_turbidity,
+                                         poa_hay_davies)
 from pvsim.environment.solar_position import Site, solar_noon, sun_position, sunrise_sunset
-from pvsim.environment.weather import SKY_TYPES, Weather, WeatherConfig
+from pvsim.environment.weather import PL_A, PL_C, SKY_TYPES, Weather, WeatherConfig
 
 SITE = Site()
 
@@ -86,6 +87,34 @@ def test_ambient_temperature_diurnal():
     assert w.t_ambient(6.4 * 3600) < w.t_ambient(14.5 * 3600) - 5
     temps = [w.t_ambient(t) for t in range(0, 86400, 600)]
     assert 22 < min(temps) and max(temps) < 37
+
+
+def test_ambient_temperature_parton_logan_peak():
+    # Eq. 1 (Parton & Logan 1981, p. 206): sin(pi m / (Y + 2a)) peaks at
+    # m = (Y + 2a)/2 hours after Tmin (sunrise + c), where T = Tmax.
+    rise, sset = 6.3, 18.5
+    w = Weather(WeatherConfig(sky="clear", seed=1), rise, sset)
+    t_peak = rise + PL_C + (sset - rise + 2 * PL_A) / 2
+    t_max = w.cfg.t_min + (w.cfg.t_max - w.cfg.t_min) * w.params.t_swing
+    assert w.t_ambient(t_peak * 3600) == pytest.approx(t_max, abs=1e-9)
+    assert w.t_ambient((t_peak - 0.5) * 3600) < t_max
+    assert w.t_ambient((t_peak + 0.5) * 3600) < t_max
+
+
+def test_linke_turbidity_matches_pvlib():
+    pd = pytest.importorskip("pandas")
+    pvlib = pytest.importorskip("pvlib")
+    days = pd.date_range("2026-01-01", "2026-12-31", freq="7D").append(
+        pd.date_range("2028-02-25", "2028-03-05", freq="D"))  # leap year
+    ref = pvlib.clearsky.lookup_linke_turbidity(days, SITE.latitude, SITE.longitude)
+    for d, r in zip(days, ref):
+        assert linke_turbidity(d.date()) == pytest.approx(r, abs=1e-6)
+
+
+def test_day_environment_uses_monthly_linke():
+    assert DayEnvironment(day=date(2026, 1, 15)).linke < 3.7
+    assert DayEnvironment(day=date(2026, 7, 15)).linke > 5.2
+    assert DayEnvironment(day=date(2026, 7, 15), weather=WeatherConfig(linke=4.5)).linke == 4.5
 
 
 def test_shade_event_ramps():

@@ -87,6 +87,12 @@ class LiveChannel:
         self.shorted: tuple[bool, ...] | None = None  # fault hook: shorted bypass diodes
         self.open_circuit = False  # fault hook: panel disconnected
 
+    def set_datasheet(self, datasheet: PanelDatasheet) -> None:
+        """Swap the panel (re-extracts the single-diode parameters)."""
+        panel = Panel(datasheet)
+        self.datasheet, self.panel = datasheet, panel
+        self._v_prev = None
+
     def reset(self) -> None:
         self.t = 0.0
         self._v_prev = None

@@ -45,6 +45,8 @@ class Converter(ABC):
     d_min: float
     d_max: float
     v_uvlo: float
+    topology: str = "buck"
+    conducts_when_off: bool = False  # True if current still flows while not switching (boost)
 
     @abstractmethod
     def output(self, v_in: float, d: float, load: ElectronicLoad) -> ConverterResult:

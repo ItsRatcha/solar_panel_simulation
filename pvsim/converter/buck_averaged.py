@@ -77,6 +77,8 @@ class BuckParams:
 
 
 class BuckAveraged(Converter):
+    topology = "buck"
+
     def __init__(self, params: BuckParams | None = None):
         self.p = params or BuckParams()
 

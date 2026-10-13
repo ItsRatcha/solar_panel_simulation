@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSlider, QSpinBox, QSplitter, QToolBox, QVBoxLayout, QWidget,
 )
 
-from ..converter.buck_averaged import BuckAveraged, BuckParams
+from ..converter import TOPOLOGIES, BoostParams, BuckParams, make_converter
 from ..data.export import RESAMPLE_CHOICES, write_csv
 from ..data.recorder import Recorder
 from ..engine.day_runner import DayRunner, DaySnapshot
@@ -155,7 +155,7 @@ class LabeledSlider(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PV + Buck + MPPT simulator")
+        self.setWindowTitle("PV + DC-DC converter + MPPT simulator")
         self.resize(1500, 1050)
 
         self.ch = LiveChannel()
@@ -324,6 +324,9 @@ class MainWindow(QMainWindow):
         self.cmb_algo.currentIndexChanged.connect(self._apply_algo)
         self.sp_step.valueChanged.connect(self._apply_algo)
         self.sl_duty.valueChanged.connect(self._manual_duty)
+        self.cmb_topo = self._topology_combo()
+        self.cmb_topo.currentIndexChanged.connect(self._apply_converter)
+        f.addRow("Converter", self.cmb_topo)
         f.addRow("Algorithm", self.cmb_algo)
         f.addRow(self.lbl_step, self.sp_step)
         f.addRow("Manual duty", self.sl_duty)
@@ -334,7 +337,7 @@ class MainWindow(QMainWindow):
         f = QFormLayout(g)
         self.chk_b = QCheckBox("Run panel B next to A")
         self.chk_b.setToolTip("B sees the same sun, shade and load as A.\n"
-                              "Pick a different algorithm (or, in day mode, a different mount).")
+                              "Pick a different converter, algorithm or (in day mode) mount.")
         self.cmb_algo_b = QComboBox()
         for name in available_mppt():
             self.cmb_algo_b.addItem(ALGO_LABELS.get(name, name), name)
@@ -348,6 +351,9 @@ class MainWindow(QMainWindow):
         self.cmb_algo_b.currentIndexChanged.connect(self._apply_algo_b)
         self.cmb_mount_b.currentIndexChanged.connect(self._mount_b_changed)
         f.addRow(self.chk_b)
+        self.cmb_topo_b = self._topology_combo()
+        self.cmb_topo_b.currentIndexChanged.connect(self._apply_converter)
+        f.addRow("Converter (B)", self.cmb_topo_b)
         f.addRow("Algorithm (B)", self.cmb_algo_b)
         f.addRow("Mount (B)", self.cmb_mount_b)
         v.addWidget(g)
@@ -390,6 +396,8 @@ class MainWindow(QMainWindow):
              "Partly cloudy equinox day, a tree shades the panel 07:00-09:00, fixed mount."),
             ("Full day: fixed vs tracker", self.preset_ab,
              "Clear day; A on a fixed mount, B on a 2-axis tracker. Compare the energy."),
+            ("Full day: buck (A) vs boost (B)", lambda: self.apply_scenario(get_preset("buck_vs_boost")),
+             "20 Ω load: the buck can't reach the MPP, the boost can."),
         ):
             b = QPushButton(text)
             b.setToolTip(tip)
@@ -416,6 +424,7 @@ class MainWindow(QMainWindow):
             "noct": "Nominal operating cell temperature [°C].",
         })
         self.f_buck = ParamForm(BuckParams().to_dict())
+        self.f_boost = ParamForm(BoostParams().to_dict())
         conv = {("t_conv_bus", t): _conv_label(t) for t in CONV_TIMES}
         conv.update({("t_conv_shunt", t): _conv_label(t) for t in CONV_TIMES})
         self.f_sensor = ParamForm(INA226Config().to_dict(),
@@ -425,11 +434,13 @@ class MainWindow(QMainWindow):
         self.f_fixed = ParamForm(FIXED_DEFAULTS, tips={"azimuth": "180 = facing south."})
         self.f_tracker = ParamForm(TrackerParams().to_dict())
         for form, title in ((self.f_ds, "Panel datasheet"), (self.f_buck, "Buck converter"),
+                            (self.f_boost, "Boost converter"),
                             (self.f_sensor, "INA226 sensor"), (self.f_fixed, "Fixed mount (next day)"),
                             (self.f_tracker, "Tracker (next day)")):
             self.tb_adv.addItem(form, title)
         self.f_ds.changed.connect(self._apply_datasheet)
         self.f_buck.changed.connect(self._apply_converter)
+        self.f_boost.changed.connect(self._apply_converter)
         self.f_sensor.changed.connect(self._apply_sensor)
         note = QLabel("Panel, converter and sensor changes apply at once. "
                       "Mount changes apply on the next 'Start new day'.")
@@ -644,10 +655,29 @@ class MainWindow(QMainWindow):
         return self._try("Panel datasheet", lambda: PanelDatasheet.from_dict(
             {**PanelDatasheet().to_dict(), **self.f_ds.values()}))
 
-    def _buck_params(self) -> BuckParams | None:
+    @staticmethod
+    def _topology_combo() -> QComboBox:
+        cmb = QComboBox()
+        for t in TOPOLOGIES:
+            cmb.addItem(t.capitalize(), t)
+        cmb.setToolTip("Buck steps the panel voltage down (needs a low-resistance load);\n"
+                       "boost steps it up (needs a high-resistance load).")
+        return cmb
+
+    def _conv_form(self, topology: str) -> ParamForm:
+        return self.f_boost if topology == "boost" else self.f_buck
+
+    def _conv_dict(self, topology: str) -> dict:
+        """Parameters of `topology` as shown (ideal ones when losses are off); may raise ValueError."""
+        cls = BoostParams if topology == "boost" else BuckParams
         if not self.chk_losses.isChecked():
-            return BuckParams.ideal()
-        return self._try("Buck converter", lambda: BuckParams.from_dict(self.f_buck.values()))
+            return cls.ideal().to_dict()
+        return self._conv_form(topology).values()
+
+    def _make_conv(self, topology: str):
+        """Averaged converter of `topology`, or None (reason in the status bar) if a box does not parse."""
+        return self._try(f"{topology.capitalize()} converter",
+                         lambda: make_converter(topology, self._conv_dict(topology)))
 
     def _sensor_cfg(self) -> INA226Config | None:
         if not self.chk_sensor.isChecked():
@@ -667,9 +697,10 @@ class MainWindow(QMainWindow):
 
     def _make_manual_b(self) -> LiveChannel:
         a = self.ch
+        topo = self.cmb_topo_b.currentData()
         return LiveChannel(
             datasheet=a.datasheet,
-            conv=BuckAveraged(self._buck_params() or BuckParams()),
+            conv=self._make_conv(topo) or make_converter(topo),
             load=a.load,
             algo=self._make_algo(self.cmb_algo_b.currentData(), 0.3),
             sensor=INA226(self._sensor_cfg() or INA226Config()),
@@ -718,11 +749,13 @@ class MainWindow(QMainWindow):
 
     def _apply_converter(self, *_):
         self.f_buck.setEnabled(self.chk_losses.isChecked())
-        params = self._buck_params()
-        if params is None:
-            return
-        for c in self._channels():
-            c.conv = BuckAveraged(params)
+        self.f_boost.setEnabled(self.chk_losses.isChecked())
+        for c, cmb in ((self.ch, self.cmb_topo), (self.ch_b, self.cmb_topo_b)):
+            if c is None:
+                continue
+            conv = self._make_conv(cmb.currentData())
+            if conv is not None:
+                c.conv = conv
 
     def _apply_sensor(self, *_):
         self.f_sensor.setEnabled(self.chk_sensor.isChecked())
@@ -792,8 +825,13 @@ class MainWindow(QMainWindow):
         self.cmb_algo.blockSignals(True)
         self.cmb_algo.setCurrentIndex(self.cmb_algo.findData(algo))
         self.cmb_algo.blockSignals(False)
+        for cmb in (self.cmb_topo, self.cmb_topo_b):  # the manual presets are written for a buck
+            cmb.blockSignals(True)
+            cmb.setCurrentIndex(cmb.findData("buck"))
+            cmb.blockSignals(False)
         self._apply_conditions()
         self._apply_load()
+        self._apply_converter()
         self._apply_algo()
 
     def _at(self, t: float, fn):
@@ -858,15 +896,17 @@ class MainWindow(QMainWindow):
         self.apply_scenario(get_preset("clear_day_fixed_vs_tracker"))
 
     # ---------------------------------------------------------------- scenarios
-    def _panel_spec(self, pid: str, algo: str, mount: str, base: PanelSpec | None) -> PanelSpec:
+    def _panel_spec(self, pid: str, algo: str, mount: str, topology: str,
+                    base: PanelSpec | None) -> PanelSpec:
         mount_params = self.f_fixed.values() if mount == "fixed" else self.f_tracker.values()
         mppt = dict(base.mppt_params) if base is not None and base.algorithm == algo else {}
         mppt.update(self._algo_kw(algo))
-        buck = self.f_buck.values() if self.chk_losses.isChecked() else BuckParams.ideal().to_dict()
+        conv = {t: self._conv_dict(t) for t in TOPOLOGIES}
         sensor = self.f_sensor.values() if self.chk_sensor.isChecked() else INA226Config.ideal().to_dict()
         return PanelSpec(
             panel_id=pid, mount=mount, mount_params=mount_params, algorithm=algo, mppt_params=mppt,
-            datasheet=self.f_ds.values(), buck=buck, sensor=sensor,
+            datasheet=self.f_ds.values(), topology=topology, buck=conv["buck"], boost=conv["boost"],
+            sensor=sensor,
             load={"mode": self.cmb_load.currentText(), "setpoint": self.sp_load.value()},
             load_profile=base.load_profile if base is not None else None,
         )
@@ -885,11 +925,11 @@ class MainWindow(QMainWindow):
         bp = list(base.panels)
         id_a = bp[0].panel_id if bp else "A"
         panels = [self._panel_spec(id_a, self.cmb_algo.currentData(), self.cmb_mount.currentData(),
-                                   bp[0] if bp else None)]
+                                   self.cmb_topo.currentData(), bp[0] if bp else None)]
         if self.chk_b.isChecked():
             id_b = bp[1].panel_id if len(bp) > 1 else ("B2" if id_a == "B" else "B")
-            panels.append(self._panel_spec(id_b, self.cmb_algo_b.currentData(),
-                                           self.cmb_mount_b.currentData(), bp[1] if len(bp) > 1 else None))
+            panels.append(self._panel_spec(id_b, self.cmb_algo_b.currentData(), self.cmb_mount_b.currentData(),
+                                           self.cmb_topo_b.currentData(), bp[1] if len(bp) > 1 else None))
         ids = {p.panel_id for p in panels}
         faults = [dict(e) for e in base.faults if e.get("panel_id") in (None, *ids)]
         return Scenario(
@@ -919,7 +959,8 @@ class MainWindow(QMainWindow):
         self.base_sc = sc
         blocked = (self.de_date, self.cmb_sky, self.sp_seed, self.cmb_dayshade, self.cmb_mount,
                    self.cmb_period, self.cmb_algo, self.sp_step, self.cmb_load, self.sp_load,
-                   self.chk_losses, self.chk_sensor, self.chk_b, self.cmb_algo_b, self.cmb_mount_b)
+                   self.chk_losses, self.chk_sensor, self.chk_b, self.cmb_algo_b, self.cmb_mount_b,
+                   self.cmb_topo, self.cmb_topo_b)
         for w in blocked:
             w.blockSignals(True)
         try:
@@ -940,9 +981,11 @@ class MainWindow(QMainWindow):
             self._select_period(sc.mppt_period)
 
             pa = sc.panels[0]
-            for p, cmb_algo, cmb_mount in ((pa, self.cmb_algo, self.cmb_mount),
-                                           *(((sc.panels[1], self.cmb_algo_b, self.cmb_mount_b),)
-                                             if len(sc.panels) > 1 else ())):
+            for p, cmb_algo, cmb_mount, cmb_topo in (
+                    (pa, self.cmb_algo, self.cmb_mount, self.cmb_topo),
+                    *(((sc.panels[1], self.cmb_algo_b, self.cmb_mount_b, self.cmb_topo_b),)
+                      if len(sc.panels) > 1 else ())):
+                cmb_topo.setCurrentIndex(max(0, cmb_topo.findData(p.topology)))
                 cmb_algo.setCurrentIndex(max(0, cmb_algo.findData(p.algorithm)))
                 cmb_mount.setCurrentIndex(cmb_mount.findData("fixed" if p.mount == "fixed" else "tracker"))
             mp = pa.mppt_params
@@ -959,10 +1002,15 @@ class MainWindow(QMainWindow):
             mode = pa.load.get("mode", "CR")
             self.cmb_load.setCurrentText(mode)
             self._set_load_widgets(mode, pa.load.get("setpoint"))
-            buck = BuckParams.from_dict(pa.buck)
-            self.chk_losses.setChecked(buck != BuckParams.ideal())
-            if buck != BuckParams.ideal():
-                self.f_buck.set_values(buck.to_dict())
+            # losses stay on unless every shown panel uses the ideal parameters of its topology
+            lossy = False
+            for p in sc.panels[:2]:
+                cls = BoostParams if p.topology == "boost" else BuckParams
+                params = cls.from_dict({**cls().to_dict(), **p.converter_params})
+                if params != cls.ideal():
+                    lossy = True
+                    self._conv_form(p.topology).set_values(params.to_dict())
+            self.chk_losses.setChecked(lossy)
             cfg = INA226Config.from_dict(pa.sensor)
             self.chk_sensor.setChecked(not cfg.is_ideal)
             if not cfg.is_ideal:
@@ -972,6 +1020,7 @@ class MainWindow(QMainWindow):
             for w in blocked:
                 w.blockSignals(False)
         self.f_buck.setEnabled(self.chk_losses.isChecked())
+        self.f_boost.setEnabled(self.chk_losses.isChecked())
         self.f_sensor.setEnabled(self.chk_sensor.isChecked())
         if self.cmb_mode.currentIndex() != 1:
             self.cmb_mode.setCurrentIndex(1)  # starts the day through _mode_changed
@@ -1305,7 +1354,7 @@ class MainWindow(QMainWindow):
         warn = []
         if not s.reach.reachable and s.p_mpp > 0.5:
             warn.append("MPP UNREACHABLE — " + s.reach.reason
-                        + ". Lower the load resistance (or raise its current) so the buck can reach the peak.")
+                        + ". Change the load (or the converter topology) so the duty range covers the peak.")
         if s.collapsed and (ds is None or s.p_mpp > 0.5):
             warn.append("Converter is OFF: panel voltage collapsed below the converter's minimum input.")
         self.lbl_warn.setText("\n".join(warn))

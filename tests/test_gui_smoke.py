@@ -114,3 +114,41 @@ def test_scenario_preset_two_panels_and_round_trip(window, tmp_path):
     assert w.day_mode
     assert w.scenario().to_dict() == sc1.to_dict() == sc2.to_dict()
     w.timer.stop()
+
+
+def test_topology_switch_manual(window):
+    from pvsim.converter import BoostAveraged, BuckAveraged
+
+    w = window
+    w.preset_normal()
+    w.chk_b.setChecked(True)
+    w.cmb_topo_b.setCurrentIndex(w.cmb_topo_b.findData("boost"))
+    assert isinstance(w.ch.conv, BuckAveraged) and isinstance(w.ch_b.conv, BoostAveraged)
+    for _ in range(20):
+        w._tick()
+    assert w.last_b is not None and not math.isnan(w.hist["p_pv_b"][-1])
+    w.chk_losses.setChecked(False)
+    assert w.ch_b.conv.p.r_l == 0.0
+    w.chk_losses.setChecked(True)
+    w.cmb_topo_b.setCurrentIndex(w.cmb_topo_b.findData("buck"))
+    w.chk_b.setChecked(False)
+    w.timer.stop()
+
+
+def test_buck_vs_boost_preset_round_trip(window, tmp_path):
+    from pvsim.converter import BoostAveraged
+    from pvsim.scenario.presets import get_preset
+
+    w = window
+    w.apply_scenario(get_preset("buck_vs_boost"))
+    assert [p.topology for p in w.scenario().panels] == ["buck", "boost"]
+    assert isinstance(w.ch_b.conv, BoostAveraged)
+    _run_to_end(w)
+    assert w.runner.done and w.runner_b.done
+    assert w.runner_b.energy.mppt_eff > 0.95 > w.runner.energy.mppt_eff
+    sc1 = w.scenario()
+    path = w.save_scenario_to(tmp_path / "bb.json")
+    w.preset_normal()
+    w.load_scenario_from(path)
+    assert w.scenario().to_dict() == sc1.to_dict()
+    w.timer.stop()

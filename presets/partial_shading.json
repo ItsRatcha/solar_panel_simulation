@@ -40,7 +40,9 @@
       "algorithm": "po",
       "mppt_params": {},
       "datasheet": {},
+      "topology": "buck",
       "buck": {},
+      "boost": {},
       "sensor": {},
       "load": {
         "mode": "CR",
@@ -57,7 +59,9 @@
         "scan_period": 600
       },
       "datasheet": {},
+      "topology": "buck",
       "buck": {},
+      "boost": {},
       "sensor": {},
       "load": {
         "mode": "CR",

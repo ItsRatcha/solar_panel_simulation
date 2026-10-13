@@ -61,11 +61,26 @@ def load_step() -> Scenario:
     )
 
 
+def buck_vs_boost() -> Scenario:
+    """Same panel and 20 ohm load behind a buck and a boost.  A buck only raises
+    the reflected resistance (R_in >= R_load), so it stays off the MPP and is
+    flagged mpp_unreachable; a boost lowers it (R_in = R_load (1-D)^2) and tracks."""
+    load = {"mode": "CR", "setpoint": 20.0}
+    return Scenario(
+        name="buck_vs_boost",
+        weather=WeatherConfig(sky="clear", seed=1),
+        start_h=10.0, end_h=14.0,
+        panels=[PanelSpec("buck", mount="fixed", algorithm="po", topology="buck", load=dict(load)),
+                PanelSpec("boost", mount="fixed", algorithm="po", topology="boost", load=dict(load))],
+    )
+
+
 PRESETS: dict[str, Callable[[], Scenario]] = {
     "clear_day_fixed_vs_tracker": clear_day_fixed_vs_tracker,
     "partial_shading": partial_shading,
     "cloudy_day": cloudy_day,
     "load_step": load_step,
+    "buck_vs_boost": buck_vs_boost,
 }
 
 

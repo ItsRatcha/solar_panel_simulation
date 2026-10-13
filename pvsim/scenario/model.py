@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
-from ..converter.buck_averaged import BuckAveraged, BuckParams
+from ..converter import TOPOLOGIES, make_converter
 from ..data.faults import FaultEvent, FaultSchedule, parse_faults
 from ..engine.live import LiveChannel
 from ..environment.day import SHADE_PRESETS, DayEnvironment, ShadeEvent
@@ -36,7 +36,9 @@ class PanelSpec:
     algorithm: str = "po"
     mppt_params: dict = field(default_factory=dict)
     datasheet: dict = field(default_factory=dict)  # PanelDatasheet overrides
-    buck: dict = field(default_factory=dict)  # BuckParams overrides
+    topology: str = "buck"  # "buck" | "boost"
+    buck: dict = field(default_factory=dict)  # BuckParams overrides (used when topology == "buck")
+    boost: dict = field(default_factory=dict)  # BoostParams overrides (used when topology == "boost")
     sensor: dict = field(default_factory=dict)  # INA226Config overrides (both sensors)
     load: dict = field(default_factory=lambda: {"mode": "CR", "setpoint": 3.0})
     load_profile: dict | None = None  # LoadProfile.to_dict(); times in s after midnight
@@ -45,9 +47,19 @@ class PanelSpec:
         return {
             "panel_id": self.panel_id, "mount": self.mount, "mount_params": dict(self.mount_params),
             "algorithm": self.algorithm, "mppt_params": dict(self.mppt_params),
-            "datasheet": dict(self.datasheet), "buck": dict(self.buck), "sensor": dict(self.sensor),
+            "datasheet": dict(self.datasheet), "topology": self.topology,
+            "buck": dict(self.buck), "boost": dict(self.boost), "sensor": dict(self.sensor),
             "load": dict(self.load), "load_profile": self.load_profile,
         }
+
+    def __post_init__(self):
+        if self.topology not in TOPOLOGIES:
+            raise ValueError(f"topology must be one of {TOPOLOGIES}, got {self.topology!r}")
+
+    @property
+    def converter_params(self) -> dict:
+        """Parameter overrides of the active topology."""
+        return self.boost if self.topology == "boost" else self.buck
 
     @classmethod
     def from_dict(cls, d: dict) -> "PanelSpec":
@@ -124,7 +136,7 @@ class Scenario:
         cfg = INA226Config.from_dict(p.sensor)
         ch = LiveChannel(
             datasheet=PanelDatasheet.from_dict({**PanelDatasheet().to_dict(), **p.datasheet}),
-            conv=BuckAveraged(BuckParams.from_dict(p.buck)),
+            conv=make_converter(p.topology, p.converter_params),
             load=ElectronicLoad.from_dict(p.load),
             algo=create_mppt(p.algorithm, **p.mppt_params),
             sensor=INA226(cfg, seed=s_in),

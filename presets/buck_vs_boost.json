@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "name": "buck_vs_boost",
+  "date": "2026-03-21",
+  "seed": 1,
+  "mppt_period": 1.0,
+  "env_dt": 1.0,
+  "margin_s": 300.0,
+  "start_h": 10.0,
+  "end_h": 14.0,
+  "latitude": 14.07,
+  "longitude": 100.6,
+  "tz_hours": 7.0,
+  "weather": {
+    "sky": "clear",
+    "seed": 1,
+    "t_min": 25.5,
+    "t_max": 34.0,
+    "linke": null
+  },
+  "shading": "none",
+  "faults": [],
+  "panels": [
+    {
+      "panel_id": "buck",
+      "mount": "fixed",
+      "mount_params": {},
+      "algorithm": "po",
+      "mppt_params": {},
+      "datasheet": {},
+      "topology": "buck",
+      "buck": {},
+      "boost": {},
+      "sensor": {},
+      "load": {
+        "mode": "CR",
+        "setpoint": 20.0
+      },
+      "load_profile": null
+    },
+    {
+      "panel_id": "boost",
+      "mount": "fixed",
+      "mount_params": {},
+      "algorithm": "po",
+      "mppt_params": {},
+      "datasheet": {},
+      "topology": "boost",
+      "buck": {},
+      "boost": {},
+      "sensor": {},
+      "load": {
+        "mode": "CR",
+        "setpoint": 20.0
+      },
+      "load_profile": null
+    }
+  ]
+}

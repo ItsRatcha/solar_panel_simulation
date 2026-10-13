@@ -80,7 +80,7 @@ def cmd_schema(a: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="pvsim", description="PV + buck + MPPT simulator")
+    ap = argparse.ArgumentParser(prog="pvsim", description="PV + DC-DC (buck or boost) + MPPT simulator")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="run one scenario headless and export CSV")

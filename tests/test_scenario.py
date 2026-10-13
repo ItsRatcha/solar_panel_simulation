@@ -156,3 +156,19 @@ def test_cli_run_and_presets(tmp_path, capsys):
     assert "load_step" in capsys.readouterr().out
     assert main(["run", "no_such_preset"]) == 2
     assert main(["schema"]) == 0
+
+
+def test_topology_field_round_trip_and_old_files():
+    from pvsim.converter import BoostAveraged, BuckAveraged
+
+    sc = get_preset("buck_vs_boost")
+    assert Scenario.from_dict(sc.to_dict()).to_dict() == sc.to_dict()
+    assert isinstance(sc.build_channel(0)[0].conv, BuckAveraged)
+    assert isinstance(sc.build_channel(1)[0].conv, BoostAveraged)
+    old = PanelSpec().to_dict()
+    del old["topology"], old["boost"]  # files written before the boost option
+    assert PanelSpec.from_dict(old).topology == "buck"
+    with pytest.raises(ValueError, match="topology"):
+        PanelSpec(topology="cuk")
+    sc = Scenario(panels=[PanelSpec("b", topology="boost", boost={"l": 100e-6}, buck={"l": 1.0})])
+    assert sc.build_channel(0)[0].conv.p.l == 100e-6

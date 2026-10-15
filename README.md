@@ -20,7 +20,8 @@ comes from. Each item is tagged:
 Page convention: **p.** = printed journal/book page; **pdf p.** = page number inside the PDF file
 (used where the PDF has no printed numbers or the printed numbers were not extractable).
 
----
+![screenshot](screenshot.png)
+screenshot of the app
 
 ## Contents
 
@@ -902,18 +903,3 @@ Also changed: TL now defaults to the monthly Remund value for the date instead o
 33. IEC 62891:2020. *Maximum power point tracking efficiency of grid connected photovoltaic inverters* (preview, contents only).
 34. Holmgren, W.F., Hansen, C.W., Mikofski, M.A. (2018). pvlib python: a python package for modeling solar energy systems. *J. Open Source Softw.* 3(29), 884. doi:10.21105/joss.00884
 
-**Cited, original not in folder:** Hay, J.E., Davies, J.A. (1980). Calculation of the solar
-radiation incident on an inclined surface. *Proc. First Canadian Solar Radiation Data Workshop*,
-59–72 (checked via refs. 25 and 27). Spencer, J.W. (1971). Fourier series representation of the
-position of the Sun. *Search* 2(5), 172 (checked via ref. 25). NOAA Global Monitoring Laboratory,
-*Solar Calculator* (refraction, sunrise zenith).
-
-**In the literature folder but not used by the code (further reading on MPPT):**
-Meng et al. 2025 (*Energy Reports* 13, adaptive two-step P&O) · Ali et al. 2021 (*IEEE Access*,
-fuzzy variable-step IncCond) · Tan, Green & Hernandez-Aramburo 2008 (PECon, P&O analysis) ·
-Atallah et al. 2014 (P&O with buck/buck-boost) · Kute & Pote (IncCond) · Lokanadham 2012
-(*IJERA*, IncCond) · Chandra Sekhar 2023 (IncCond with boost) · Saberi et al. 2023
-(*Int. J. Energy Res.*, improved P&O) · Ankaiah (IncCond) · Putri et al. 2015 (*Energy Procedia*
-68, IncCond) · Miyatake et al. (PSO MPPT for multiple arrays) · Piegari et al. 2015
-(*Energies* 8, adaptive P&O) · Mamatha 2015 (P&O) · Alwash et al. 2025 (*JESA* 58(5),
-variable-step P&O).
